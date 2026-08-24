@@ -22,7 +22,9 @@ $offset = ($paginaActual - 1) * $registrosPorPagina;
 // Construir enlace de referido dinámico
 $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? "https" : "http";
 $host = $_SERVER['HTTP_HOST'];
-$referralUrl = $protocol . "://" . $host . "/Aplicaiones/fieles/registro.php?ref=" . urlencode($user['codigo_referido']);
+$baseDir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/\\');
+$baseDir = str_replace('/lider', '', $baseDir);
+$referralUrl = $protocol . "://" . $host . ($baseDir ? $baseDir : '') . "/registro.php?ref=" . urlencode($user['codigo_referido']);
 
 // Estadísticas Desglosadas del Líder
 // 1. Directos

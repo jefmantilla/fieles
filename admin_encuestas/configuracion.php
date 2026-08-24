@@ -49,7 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
 
 // Obtener Configuración de URL Externa Actual
 $stmtConfigUrl = $pdo->query("SELECT url_consulta_externa FROM configuracion_encuestas WHERE id = 1");
-$urlExternaActual = $stmtConfigUrl->fetchColumn() ?: 'http://localhost/Aplicaiones/fieles/registro.php?ref=LID-40FEA8AA';
+$urlExternaActual = $stmtConfigUrl->fetchColumn() ?: '../registro.php?ref=LID-40FEA8AA';
 
 // Obtener Lista Completa de Rondas Creadas
 $stmtHistorialRondas = $pdo->query("SELECT r.*, u.nombre_completo as creador_nombre FROM rondas_encuestas r JOIN usuarios u ON r.creado_por = u.id ORDER BY r.numero_ronda DESC");

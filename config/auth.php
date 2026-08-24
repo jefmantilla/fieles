@@ -5,6 +5,14 @@
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/security.php';
 
+function getAppSubdir() {
+    $scriptDir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? ''));
+    if (strpos($scriptDir, '/admin_encuestas') !== false || strpos($scriptDir, '/admin') !== false || strpos($scriptDir, '/lider') !== false || strpos($scriptDir, '/encuestadora') !== false) {
+        return '..';
+    }
+    return '.';
+}
+
 function isLoggedIn() {
     return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
 }
@@ -23,7 +31,8 @@ function getCurrentUser() {
 function requireLogin() {
     setSecurityHeaders();
     if (!isLoggedIn()) {
-        header("Location: /Aplicaiones/fieles/index.php");
+        $base = getAppSubdir();
+        header("Location: {$base}/index.php");
         exit();
     }
 }
@@ -32,7 +41,8 @@ function requireRole($requiredRole) {
     requireLogin();
     $user = getCurrentUser();
     if (!$user || strtolower($user['role_name']) !== strtolower($requiredRole)) {
-        header("Location: /Aplicaiones/fieles/index.php?error=acceso_denegado");
+        $base = getAppSubdir();
+        header("Location: {$base}/index.php?error=acceso_denegado");
         exit();
     }
 }
