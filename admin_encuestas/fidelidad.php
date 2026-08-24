@@ -1,0 +1,403 @@
+<?php
+require_once __DIR__ . '/../config/db.php';
+require_once __DIR__ . '/../config/security.php';
+require_once __DIR__ . '/../config/auth.php';
+
+requireRole('AdminEncuestas');
+
+$admin = getCurrentUser();
+$pdo = getDB();
+
+// Configuración de Paginación
+$paginaActual = max(1, (int)($_GET['page'] ?? 1));
+$registrosPorPagina = 16;
+$offset = ($paginaActual - 1) * $registrosPorPagina;
+
+$filtroFidelidad = sanitizeInput($_GET['fidelidad'] ?? '');
+$buscarText = sanitizeInput($_GET['buscar'] ?? '');
+
+// Consulta para analizar la fidelidad del votante según su historial completo de encuestas
+$sqlFidelidad = "
+    SELECT r.id as referido_id, r.cedula, CONCAT(r.nombres, ' ', r.apellidos) as nombre_completo,
+           r.celular, r.comuna, r.votante_yopal,
+           COUNT(re.id) as total_rondas,
+           COUNT(DISTINCT re.candidato_elegido) as candidatos_distintos,
+           SUBSTRING_INDEX(GROUP_CONCAT(re.candidato_elegido ORDER BY re.creado_en ASC), ',', 1) as voto_inicial,
+           SUBSTRING_INDEX(GROUP_CONCAT(re.candidato_elegido ORDER BY re.creado_en DESC), ',', 1) as voto_ultimo,
+           MAX(re.creado_en) as ultima_fecha
+    FROM referidos r
+    JOIN respuestas_encuestas re ON re.referido_id = r.id
+    GROUP BY r.id
+";
+
+$stmtTodosFidelidad = $pdo->query($sqlFidelidad);
+$todosVotantes = $stmtTodosFidelidad->fetchAll();
+
+// Conteo por candidato para votantes 100% Fieles
+$fielesPorCandidato = [];
+
+// Obtener lista de candidatos activos
+$stmtCandList = $pdo->query("SELECT nombre, grupo FROM candidatos_encuestas WHERE activo = 1 ORDER BY id ASC");
+$candidatosActivos = $stmtCandList->fetchAll();
+
+foreach ($candidatosActivos as $c) {
+    $fielesPorCandidato[$c['nombre']] = 0;
+}
+
+$countTotalFieles = 0;
+$countCambiantes = 0;
+$countIndecisos = 0;
+$countUnaSola = 0;
+
+foreach ($todosVotantes as $v) {
+    if ($v['total_rondas'] == 1) {
+        $countUnaSola++;
+    } else if ($v['candidatos_distintos'] == 1 && strpos(strtolower($v['voto_ultimo']), 'indeciso') === false) {
+        $countTotalFieles++;
+        $candNom = $v['voto_ultimo'];
+        if (isset($fielesPorCandidato[$candNom])) {
+            $fielesPorCandidato[$candNom]++;
+        } else {
+            $fielesPorCandidato[$candNom] = 1;
+        }
+    } else if ($v['candidatos_distintos'] > 1) {
+        $countCambiantes++;
+    } else {
+        $countIndecisos++;
+    }
+}
+
+// Filtro HAVING para paginación
+$havingClauses = [];
+$params = [];
+
+if ($filtroFidelidad === 'fiel') {
+    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo NOT LIKE '%Indeciso%'";
+} else if ($filtroFidelidad === 'cambiante') {
+    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos > 1";
+} else if ($filtroFidelidad === 'indeciso') {
+    $havingClauses[] = "voto_ultimo LIKE '%Indeciso%'";
+} else if (strpos($filtroFidelidad, 'fiel_') === 0) {
+    $candSel = substr($filtroFidelidad, 5);
+    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo = ?";
+    $params[] = $candSel;
+}
+
+if (!empty($buscarText)) {
+    $havingClauses[] = "(cedula LIKE ? OR nombre_completo LIKE ? OR celular LIKE ?)";
+    $term = "%" . $buscarText . "%";
+    $params[] = $term;
+    $params[] = $term;
+    $params[] = $term;
+}
+
+$havingSql = !empty($havingClauses) ? " HAVING " . implode(" AND ", $havingClauses) : "";
+
+// Conteo Paginado
+$sqlCountPaginado = "SELECT COUNT(*) FROM (" . $sqlFidelidad . $havingSql . ") as sub";
+$stmtCountPag = $pdo->prepare($sqlCountPaginado);
+$stmtCountPag->execute($params);
+$totalRegistrosFiltrados = $stmtCountPag->fetchColumn();
+$totalPaginas = max(1, ceil($totalRegistrosFiltrados / $registrosPorPagina));
+
+// Garantizar que la página actual no sobrepase el total de páginas
+if ($paginaActual > $totalPaginas) {
+    $paginaActual = $totalPaginas;
+    $offset = ($paginaActual - 1) * $registrosPorPagina;
+}
+
+// Consulta Paginada Final
+$sqlFinal = $sqlFidelidad . $havingSql . " ORDER BY total_rondas DESC, ultima_fecha DESC LIMIT " . $registrosPorPagina . " OFFSET " . $offset;
+$stmtFinal = $pdo->prepare($sqlFinal);
+$stmtFinal->execute($params);
+$listaVotantesFidelidad = $stmtFinal->fetchAll();
+
+// Query String para mantener filtros
+$queryParams = $_GET;
+unset($queryParams['page']);
+$queryString = http_build_query($queryParams);
+$pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
+
+// Rango inteligente de paginación (máximo 5 botones a los lados)
+$rangoVista = 2;
+$inicioPag = max(1, $paginaActual - $rangoVista);
+$finPag = min($totalPaginas, $paginaActual + $rangoVista);
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matriz de Fidelidad y Lealtad de Voto - Proyecto Político Social</title>
+    <!-- Font Awesome & MDB / Bootstrap 5 CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/mdb-ui-kit/6.4.0/mdb.min.css">
+    <link rel="stylesheet" href="../assets/css/custom.css">
+</head>
+<body class="bg-light">
+
+<!-- Navbar Compartido AdminEncuestas -->
+<?php $activeTab = 'fidelidad'; include __DIR__ . '/navbar.php'; ?>
+
+<div class="container-fluid px-4 py-4">
+
+    <!-- Tarjetas de Resumen de Votantes Fieles por Candidato -->
+    <div class="row g-3 mb-4">
+        <?php 
+        $coloresBorde = ['border-success', 'border-primary', 'border-warning', 'border-info', 'border-dark'];
+        $coloresBg = ['#e8f5e9', '#e3f2fd', '#fff8e1', '#e0f7fa', '#f5f5f5'];
+        $coloresTexto = ['text-success', 'text-primary', 'text-warning', 'text-info', 'text-dark'];
+
+        $indexCand = 0;
+        foreach ($candidatosActivos as $cand): 
+            $nomC = $cand['nombre'];
+            $totalFielesCand = $fielesPorCandidato[$nomC] ?? 0;
+            $porcFiel = $countTotalFieles > 0 ? round(($totalFielesCand / $countTotalFieles) * 100, 1) : 0;
+            $borde = $coloresBorde[$indexCand % count($coloresBorde)];
+            $bg = $coloresBg[$indexCand % count($coloresBg)];
+            $txt = $coloresTexto[$indexCand % count($coloresTexto)];
+        ?>
+            <div class="col-xl-3 col-md-6">
+                <div class="card card-custom bg-white border-start border-4 <?= $borde ?> p-3 shadow-sm h-100">
+                    <div class="card-body p-1 d-flex align-items-center justify-content-between">
+                        <div>
+                            <h6 class="text-uppercase text-muted fw-bold small mb-1">Fieles (100% Leal)</h6>
+                            <h5 class="fw-bold text-dark mb-0 text-truncate" style="max-width: 170px;"><?= e($nomC) ?></h5>
+                            <div class="mt-1">
+                                <span class="fw-bold <?= $txt ?> fs-5"><?= $totalFielesCand ?></span>
+                                <span class="text-muted small fw-bold ms-1">(<?= $porcFiel ?>% del total fiel)</span>
+                            </div>
+                        </div>
+                        <div class="<?= $txt ?> p-3 rounded-circle" style="background-color: <?= $bg ?>;">
+                            <i class="fas fa-user-check fa-lg"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        <?php $indexCand++; endforeach; ?>
+    </div>
+
+    <!-- Panel de Filtros para la Matriz de Fidelidad -->
+    <div class="card card-custom mb-4 shadow-sm border">
+        <div class="card-body p-3">
+            <form action="fidelidad.php" method="GET" class="row g-2 align-items-center">
+                <div class="col-md-5">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-filter me-1"></i>Filtrar por Candidato Fiel o Estado:</label>
+                    <select name="fidelidad" class="form-select form-select-sm">
+                        <option value="">-- Todos los Votantes Encuestados --</option>
+                        <option value="fiel" <?= $filtroFidelidad === 'fiel' ? 'selected' : '' ?>>🟩 Todos los Votantes Fieles (<?= $countTotalFieles ?>)</option>
+                        <?php foreach ($candidatosActivos as $c): ?>
+                            <option value="fiel_<?= e($c['nombre']) ?>" <?= $filtroFidelidad === 'fiel_' . $c['nombre'] ? 'selected' : '' ?>>
+                                ➔ Fieles a: <?= e($c['nombre']) ?> (<?= $fielesPorCandidato[$c['nombre']] ?? 0 ?>)
+                            </option>
+                        <?php endforeach; ?>
+                        <option value="cambiante" <?= $filtroFidelidad === 'cambiante' ? 'selected' : '' ?>>🟧 Votantes Cambiantes / En Riesgo (<?= $countCambiantes ?>)</option>
+                        <option value="indeciso" <?= $filtroFidelidad === 'indeciso' ? 'selected' : '' ?>>🟨 Indecisos / Blanco (<?= $countIndecisos ?>)</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-search me-1"></i>Buscar Afiliado:</label>
+                    <input type="text" name="buscar" class="form-control form-control-sm" placeholder="Nombre, Cédula o Celular..." value="<?= e($buscarText) ?>">
+                </div>
+                <div class="col-md-3 d-flex align-items-end justify-content-end gap-2 pt-3">
+                    <a href="fidelidad.php" class="btn btn-secondary btn-sm"><i class="fas fa-undo me-1"></i> Limpiar</a>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search me-1"></i> Filtrar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Tabla Matriz de Fidelidad del Votante -->
+    <div class="card card-custom shadow-sm border">
+        <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold text-primary mb-0"><i class="fas fa-shield-alt me-2"></i>Matriz de Lealtad y Evolución del Voto</h5>
+                <span class="badge bg-dark fs-6">Mostrando <?= count($listaVotantesFidelidad) ?> de <?= $totalRegistrosFiltrados ?> Afiliados (Página <?= $paginaActual ?> de <?= $totalPaginas ?>)</span>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Afiliado</th>
+                            <th>Cédula</th>
+                            <th>Celular</th>
+                            <th>Sector</th>
+                            <th>Rondas Tomadas</th>
+                            <th>Primer Voto Registrado</th>
+                            <th>Último Voto Registrado</th>
+                            <th>Clasificación de Lealtad</th>
+                            <th class="text-center">Historial Completo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if (empty($listaVotantesFidelidad)): ?>
+                            <tr>
+                                <td colspan="9" class="text-center py-4 text-muted">No se encontraron afiliados con encuestas registradas.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($listaVotantesFidelidad as $vf): ?>
+                                <tr>
+                                    <td class="fw-bold text-dark"><?= e($vf['nombre_completo']) ?></td>
+                                    <td><?= e($vf['cedula']) ?></td>
+                                    <td><i class="fas fa-phone-alt me-1 text-muted small"></i><?= e($vf['celular']) ?></td>
+                                    <td><span class="badge bg-light text-dark border"><?= e($vf['comuna']) ?></span></td>
+                                    
+                                    <td>
+                                        <span class="badge bg-dark fs-6"><i class="fas fa-sync-alt me-1 text-warning"></i><?= $vf['total_rondas'] ?> Rondas</span>
+                                    </td>
+
+                                    <td><span class="badge bg-light text-dark border"><?= e($vf['voto_inicial']) ?></span></td>
+                                    <td><span class="badge bg-primary"><?= e($vf['voto_ultimo']) ?></span></td>
+
+                                    <!-- Clasificación de Lealtad -->
+                                    <td>
+                                        <?php if ($vf['total_rondas'] == 1): ?>
+                                            <span class="badge bg-info text-white"><i class="fas fa-user-clock me-1"></i>1 Sola Toma</span>
+                                        <?php elseif ($vf['candidatos_distintos'] == 1 && strpos(strtolower($vf['voto_ultimo']), 'indeciso') === false): ?>
+                                            <span class="badge bg-success py-1 px-2 fs-6"><i class="fas fa-user-check me-1"></i>Votante Fiel (<?= e($vf['voto_ultimo']) ?>)</span>
+                                        <?php elseif ($vf['candidatos_distintos'] > 1): ?>
+                                            <span class="badge bg-warning text-dark py-1 px-2 fs-6"><i class="fas fa-exchange-alt me-1"></i>Cambiante (En Riesgo)</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-secondary py-1 px-2"><i class="fas fa-question-circle me-1"></i>Indeciso</span>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td class="text-center">
+                                        <button type="button" class="btn btn-outline-primary btn-sm shadow-0" onclick="verHistorialVotante(<?= $vf['referido_id'] ?>, '<?= e($vf['nombre_completo']) ?>')">
+                                            <i class="fas fa-history me-1"></i> Ver Historial & Notas
+                                        </button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Navegación de Paginación Inteligente (123 Páginas compactadas) -->
+            <?php if ($totalPaginas > 1): ?>
+                <nav aria-label="Navegación de lealtad" class="mt-4">
+                    <ul class="pagination justify-content-center flex-wrap">
+                        <!-- Anterior -->
+                        <li class="page-item <?= ($paginaActual <= 1) ? 'disabled' : '' ?>">
+                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual - 1) ?>">
+                                <i class="fas fa-chevron-left me-1"></i> Anterior
+                            </a>
+                        </li>
+
+                        <!-- Primera página siempre -->
+                        <?php if ($inicioPag > 1): ?>
+                            <li class="page-item"><a class="page-link" href="<?= $pageUrlPrefix ?>1">1</a></li>
+                            <?php if ($inicioPag > 2): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                        <?php endif; ?>
+
+                        <!-- Páginas del rango central -->
+                        <?php for ($p = $inicioPag; $p <= $finPag; $p++): ?>
+                            <li class="page-item <?= ($p === $paginaActual) ? 'active' : '' ?>">
+                                <a class="page-link" href="<?= $pageUrlPrefix . $p ?>"><?= $p ?></a>
+                            </li>
+                        <?php endfor; ?>
+
+                        <!-- Última página siempre -->
+                        <?php if ($finPag < $totalPaginas): ?>
+                            <?php if ($finPag < $totalPaginas - 1): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                            <li class="page-item"><a class="page-link" href="<?= $pageUrlPrefix . $totalPaginas ?>"><?= $totalPaginas ?></a></li>
+                        <?php endif; ?>
+
+                        <!-- Siguiente -->
+                        <li class="page-item <?= ($paginaActual >= $totalPaginas) ? 'disabled' : '' ?>">
+                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual + 1) ?>">
+                                Siguiente <i class="fas fa-chevron-right ms-1"></i>
+                            </a>
+                        </li>
+                    </ul>
+                </nav>
+            <?php endif; ?>
+
+        </div>
+    </div>
+
+</div>
+
+<!-- Modal Ver Historial Completo y Observaciones del Votante -->
+<div class="modal fade" id="modalHistorialVotante" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title"><i class="fas fa-history me-2 text-warning"></i>Evolución de Respuestas y Observaciones: <span id="nombreVotanteModal" class="text-warning fw-bold"></span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th># Ronda</th>
+                                <th>Fecha y Hora</th>
+                                <th>Candidato Votado</th>
+                                <th>Estado Votación</th>
+                                <th>Encuestadora</th>
+                                <th>Observaciones / Comentarios Adicionales</th>
+                            </tr>
+                        </thead>
+                        <tbody id="contenidoHistorialVotante">
+                            <!-- Carga dinámicamente -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let historialModal;
+    document.addEventListener('DOMContentLoaded', function() {
+        historialModal = new bootstrap.Modal(document.getElementById('modalHistorialVotante'));
+    });
+
+    function verHistorialVotante(referidoId, nombreCompleto) {
+        document.getElementById('nombreVotanteModal').textContent = nombreCompleto;
+        const contenedor = document.getElementById('contenidoHistorialVotante');
+        contenedor.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2 text-primary"></i>Cargando historial de encuestas...</td></tr>';
+        
+        historialModal.show();
+
+        fetch('api_historial_votante.php?id=' + requeridoId)
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.historial.length > 0) {
+                    let html = '';
+                    data.historial.forEach((item, index) => {
+                        html += `
+                            <tr>
+                                <td class="fw-bold">Ronda #${index + 1}</td>
+                                <td class="small text-muted"><i class="far fa-clock me-1"></i>${item.fecha}</td>
+                                <td><span class="badge bg-primary">${item.candidato}</span></td>
+                                <td><span class="badge bg-light text-dark border">${item.votante_yopal}</span></td>
+                                <td class="small text-muted"><i class="fas fa-headset me-1 text-success"></i>${item.encuestadora}</td>
+                                <td class="small text-dark italic">${item.observaciones || '<span class="text-muted">Sin observaciones</span>'}</td>
+                            </tr>
+                        `;
+                    });
+                    contenedor.innerHTML = html;
+                } else {
+                    contenedor.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">No se encontró historial previo.</td></tr>';
+                }
+            })
+            .catch(err => {
+                contenedor.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-danger"><i class="fas fa-exclamation-circle me-2"></i>Error al consultar el historial.</td></tr>';
+            });
+    }
+</script>
+</body>
+</html>

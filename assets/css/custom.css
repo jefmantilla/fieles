@@ -1,0 +1,81 @@
+/* Custom Styles for Proyecto Político Social - Fieles */
+
+:root {
+    --primary-color: #0d47a1;
+    --secondary-color: #1976d2;
+    --accent-color: #ff6f00;
+    --bg-light: #f5f7fa;
+}
+
+body {
+    background-color: var(--bg-light);
+    font-family: 'Roboto', 'Segoe UI', sans-serif;
+    color: #333;
+}
+
+.brand-header {
+    background: linear-gradient(135deg, #0d47a1 0%, #1565c0 100%);
+    color: #ffffff;
+    padding: 2.5rem 1rem;
+    border-radius: 0 0 25px 25px;
+    box-shadow: 0 4px 20px rgba(13, 71, 161, 0.25);
+    margin-bottom: 2rem;
+}
+
+.card-custom {
+    border: none;
+    border-radius: 15px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-custom:hover {
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary-custom {
+    background-color: var(--primary-color);
+    color: #fff;
+    font-weight: 600;
+    border-radius: 8px;
+    padding: 0.75rem 1.5rem;
+    box-shadow: 0 4px 12px rgba(13, 71, 161, 0.3);
+}
+
+.btn-primary-custom:hover {
+    background-color: #0a3880;
+    color: #fff;
+}
+
+.badge-votante {
+    font-size: 0.9rem;
+    padding: 0.4em 0.8em;
+    border-radius: 12px;
+}
+
+.referral-box {
+    background-color: #e3f2fd;
+    border-left: 5px solid #1976d2;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.qr-container {
+    background: #fff;
+    padding: 1.5rem;
+    border-radius: 15px;
+    display: inline-block;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+}
+
+/* Mobile Optimizations */
+@media (max-width: 576px) {
+    .brand-header {
+        padding: 1.5rem 1rem;
+    }
+    .card-custom {
+        border-radius: 12px;
+    }
+}
