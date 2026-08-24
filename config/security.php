@@ -29,9 +29,22 @@ function verifyCSRFToken($token) {
     return hash_equals($_SESSION['csrf_token'], $token);
 }
 
-// Escapar salidas para prevenir XSS
+// Escapar salidas para prevenir XSS y limpiar caracteres malformados (UTF-8)
 function e($string) {
-    return htmlspecialchars((string)$string, ENT_QUOTES, 'UTF-8');
+    if (!is_string($string)) {
+        return htmlspecialchars((string)$string, ENT_QUOTES, 'UTF-8');
+    }
+
+    // Normalizar secuencias malformadas de codificación mixta (ej. Mar├¡a G├│mez -> María Gómez)
+    if (strpos($string, '├') !== false || strpos($string, 'Ã') !== false) {
+        $string = str_replace(
+            ['├¡', '├│', '├í', '├®', '├║', '├▒', '├┴', '├┬', '├═', '├ô', '├Ü', 'Ã¡', 'Ã©', 'Ã\xAD', 'Ã³', 'Ãº', 'Ã±'],
+            ['í', 'ó', 'á', 'é', 'ú', 'ñ', 'Á', 'É', 'Í', 'Ó', 'Ú', 'á', 'é', 'í', 'ó', 'ú', 'ñ'],
+            $string
+        );
+    }
+
+    return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
 }
 
 // Sanitizar entradas generales

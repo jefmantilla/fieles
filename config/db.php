@@ -1,7 +1,7 @@
 <?php
 /**
  * Configuración de Conexión a la Base de Datos mediante PDO
- * Compatible con entorno local (XAMPP) y producción (Hostinger)
+ * Compatible con entorno local (XAMPP CLI/Web) y producción (Hostinger)
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -14,7 +14,9 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$isLocal = (in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1']) || strpos($_SERVER['HTTP_HOST'] ?? '', 'localhost') !== false);
+$httpHost = $_SERVER['HTTP_HOST'] ?? '';
+$remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
+$isLocal = (php_sapi_name() === 'cli' || in_array($remoteAddr, ['127.0.0.1', '::1']) || strpos($httpHost, 'localhost') !== false || strpos($httpHost, '127.0.0.1') !== false);
 
 if (!defined('DB_HOST')) define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
 if (!defined('DB_USER')) define('DB_USER', getenv('DB_USER') ?: ($isLocal ? 'root' : 'u654004036_fieles_db'));
@@ -30,6 +32,7 @@ function getDB() {
                 PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES   => false,
+                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
             ];
 
             try {
