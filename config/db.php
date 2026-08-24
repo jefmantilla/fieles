@@ -50,18 +50,38 @@ function getDB() {
 
         } catch (PDOException $e) {
             error_log("Error de conexión a BD: " . $e->getMessage());
-            die("Error crítico de conexión a la base de datos: " . $e->getMessage());
+            die("Error crítico de conexión a la base de datos. Por favor intente más tarde.");
         }
     }
     return $pdo;
 }
 
 function initTables($pdo) {
-    $stmt = $pdo->query("SHOW TABLES LIKE 'usuarios'");
-    if ($stmt->rowCount() === 0) {
-        $sqlScript = file_get_contents(__DIR__ . '/../sql/schema.sql');
-        if ($sqlScript) {
-            $pdo->exec($sqlScript);
+    try {
+        $stmt = $pdo->query("SHOW TABLES LIKE 'usuarios'");
+        if ($stmt->rowCount() === 0) {
+            $schemaFile = __DIR__ . '/../sql/schema.sql';
+            if (file_exists($schemaFile)) {
+                $sql = file_get_contents($schemaFile);
+                
+                // Eliminar comentarios SQL de una línea y de bloque
+                $sql = preg_replace('/--.*$/m', '', $sql);
+                $sql = preg_replace('/\/\*!?[^*]*\*+\//m', '', $sql);
+                
+                // Dividir en sentencias individuales por punto y coma
+                $statements = array_filter(array_map('trim', explode(';', $sql)));
+                foreach ($statements as $stmtSql) {
+                    if (!empty($stmtSql)) {
+                        try {
+                            $pdo->exec($stmtSql);
+                        } catch (Exception $eStmt) {
+                            error_log("Aviso init SQL: " . $eStmt->getMessage());
+                        }
+                    }
+                }
+            }
         }
+    } catch (Exception $e) {
+        error_log("Error al verificar/inicializar tablas: " . $e->getMessage());
     }
 }
