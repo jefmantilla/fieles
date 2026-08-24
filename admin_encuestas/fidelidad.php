@@ -33,7 +33,7 @@ $sqlFidelidad = "
 $stmtTodosFidelidad = $pdo->query($sqlFidelidad);
 $todosVotantes = $stmtTodosFidelidad->fetchAll();
 
-// Conteo por candidato para votantes 100% Fieles
+// Conteo por candidato para votantes 100% Fieles y Estados de Llamada
 $fielesPorCandidato = [];
 
 // Obtener lista de candidatos activos
@@ -48,19 +48,29 @@ $countTotalFieles = 0;
 $countCambiantes = 0;
 $countIndecisos = 0;
 $countUnaSola = 0;
+$countNoContesto = 0;
+$countNumEquivocado = 0;
+$countRechazo = 0;
 
 foreach ($todosVotantes as $v) {
-    if ($v['total_rondas'] == 1) {
+    $ultimo = $v['voto_ultimo'];
+    
+    if (strpos($ultimo, 'No Contestó') !== false) {
+        $countNoContesto++;
+    } elseif (strpos($ultimo, 'Equivocado') !== false) {
+        $countNumEquivocado++;
+    } elseif (strpos($ultimo, 'Rechazó') !== false) {
+        $countRechazo++;
+    } elseif ($v['total_rondas'] == 1) {
         $countUnaSola++;
-    } else if ($v['candidatos_distintos'] == 1 && strpos(strtolower($v['voto_ultimo']), 'indeciso') === false) {
+    } elseif ($v['candidatos_distintos'] == 1 && strpos(strtolower($ultimo), 'indeciso') === false) {
         $countTotalFieles++;
-        $candNom = $v['voto_ultimo'];
-        if (isset($fielesPorCandidato[$candNom])) {
-            $fielesPorCandidato[$candNom]++;
+        if (isset($fielesPorCandidato[$ultimo])) {
+            $fielesPorCandidato[$ultimo]++;
         } else {
-            $fielesPorCandidato[$candNom] = 1;
+            $fielesPorCandidato[$ultimo] = 1;
         }
-    } else if ($v['candidatos_distintos'] > 1) {
+    } elseif ($v['candidatos_distintos'] > 1) {
         $countCambiantes++;
     } else {
         $countIndecisos++;
@@ -72,14 +82,20 @@ $havingClauses = [];
 $params = [];
 
 if ($filtroFidelidad === 'fiel') {
-    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo NOT LIKE '%Indeciso%'";
-} else if ($filtroFidelidad === 'cambiante') {
+    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo NOT LIKE '%Indeciso%' AND voto_ultimo NOT LIKE '%No Contestó%' AND voto_ultimo NOT LIKE '%Equivocado%' AND voto_ultimo NOT LIKE '%Rechazó%'";
+} elseif ($filtroFidelidad === 'cambiante') {
     $havingClauses[] = "total_rondas > 1 AND candidatos_distintos > 1";
-} else if ($filtroFidelidad === 'indeciso') {
+} elseif ($filtroFidelidad === 'indeciso') {
     $havingClauses[] = "voto_ultimo LIKE '%Indeciso%'";
-} else if (strpos($filtroFidelidad, 'fiel_') === 0) {
+} elseif ($filtroFidelidad === 'no_contesto') {
+    $havingClauses[] = "voto_ultimo LIKE '%No Contestó%'";
+} elseif ($filtroFidelidad === 'equivocado') {
+    $havingClauses[] = "voto_ultimo LIKE '%Equivocado%'";
+} elseif ($filtroFidelidad === 'rechazo') {
+    $havingClauses[] = "voto_ultimo LIKE '%Rechazó%'";
+} elseif (strpos($filtroFidelidad, 'fiel_') === 0) {
     $candSel = substr($filtroFidelidad, 5);
-    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo = ?";
+    $havingClauses[] = "voto_ultimo = ?";
     $params[] = $candSel;
 }
 
@@ -118,7 +134,7 @@ unset($queryParams['page']);
 $queryString = http_build_query($queryParams);
 $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
-// Rango inteligente de paginación (máximo 5 botones a los lados)
+// Rango inteligente de paginación
 $rangoVista = 2;
 $inicioPag = max(1, $paginaActual - $rangoVista);
 $finPag = min($totalPaginas, $paginaActual + $rangoVista);
@@ -141,7 +157,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
 <div class="container-fluid px-4 py-4">
 
-    <!-- Tarjetas de Resumen de Votantes Fieles por Candidato -->
+    <!-- Tarjetas de Resumen de Votantes Fieles por Candidato y Estados Especiales -->
     <div class="row g-3 mb-4">
         <?php 
         $coloresBorde = ['border-success', 'border-primary', 'border-warning', 'border-info', 'border-dark'];
@@ -175,6 +191,64 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                 </div>
             </div>
         <?php $indexCand++; endforeach; ?>
+
+        <!-- Tarjeta de Control 1: No Contestaron -->
+        <div class="col-xl-3 col-md-6">
+            <div class="card card-custom bg-white border-start border-4 border-warning p-3 shadow-sm h-100">
+                <div class="card-body p-1 d-flex align-items-center justify-content-between">
+                    <div>
+                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
+                        <h5 class="fw-bold text-dark mb-0">No Contestaron</h5>
+                        <div class="mt-1">
+                            <span class="fw-bold text-warning text-dark fs-5"><?= $countNoContesto ?></span>
+                            <span class="text-muted small fw-bold ms-1">afiliados</span>
+                        </div>
+                    </div>
+                    <div class="text-warning p-3 rounded-circle" style="background-color: #fff8e1;">
+                        <i class="fas fa-phone-slash fa-lg"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tarjeta de Control 2: Números Equivocados -->
+        <div class="col-xl-3 col-md-6">
+            <div class="card card-custom bg-white border-start border-4 border-danger p-3 shadow-sm h-100">
+                <div class="card-body p-1 d-flex align-items-center justify-content-between">
+                    <div>
+                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
+                        <h5 class="fw-bold text-dark mb-0">Núm. Equivocados</h5>
+                        <div class="mt-1">
+                            <span class="fw-bold text-danger fs-5"><?= $countNumEquivocado ?></span>
+                            <span class="text-muted small fw-bold ms-1">afiliados</span>
+                        </div>
+                    </div>
+                    <div class="text-danger p-3 rounded-circle" style="background-color: #f8d7da;">
+                        <i class="fas fa-exclamation-triangle fa-lg"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tarjeta de Control 3: Rechazaron Encuesta -->
+        <div class="col-xl-3 col-md-6">
+            <div class="card card-custom bg-white border-start border-4 border-secondary p-3 shadow-sm h-100">
+                <div class="card-body p-1 d-flex align-items-center justify-content-between">
+                    <div>
+                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
+                        <h5 class="fw-bold text-dark mb-0">Rechazaron Encuesta</h5>
+                        <div class="mt-1">
+                            <span class="fw-bold text-secondary fs-5"><?= $countRechazo ?></span>
+                            <span class="text-muted small fw-bold ms-1">afiliados</span>
+                        </div>
+                    </div>
+                    <div class="text-secondary p-3 rounded-circle" style="background-color: #e2e3e5;">
+                        <i class="fas fa-ban fa-lg"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- Panel de Filtros para la Matriz de Fidelidad -->
@@ -182,7 +256,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
         <div class="card-body p-3">
             <form action="fidelidad.php" method="GET" class="row g-2 align-items-center">
                 <div class="col-md-5">
-                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-filter me-1"></i>Filtrar por Candidato Fiel o Estado:</label>
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-filter me-1"></i>Filtrar por Candidato o Estado de Llamada:</label>
                     <select name="fidelidad" class="form-select form-select-sm">
                         <option value="">-- Todos los Votantes Encuestados --</option>
                         <option value="fiel" <?= $filtroFidelidad === 'fiel' ? 'selected' : '' ?>>🟩 Todos los Votantes Fieles (<?= $countTotalFieles ?>)</option>
@@ -192,7 +266,10 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                             </option>
                         <?php endforeach; ?>
                         <option value="cambiante" <?= $filtroFidelidad === 'cambiante' ? 'selected' : '' ?>>🟧 Votantes Cambiantes / En Riesgo (<?= $countCambiantes ?>)</option>
-                        <option value="indeciso" <?= $filtroFidelidad === 'indeciso' ? 'selected' : '' ?>>🟨 Indecisos / Blanco (<?= $countIndecisos ?>)</option>
+                        <option value="indeciso" <?= $filtroFidelidad === 'indeciso' ? 'selected' : '' ?>>🟨 Indecisos (<?= $countIndecisos ?>)</option>
+                        <option value="no_contesto" <?= $filtroFidelidad === 'no_contesto' ? 'selected' : '' ?>>📞 No Contestaron / Sin Respuesta (<?= $countNoContesto ?>)</option>
+                        <option value="equivocado" <?= $filtroFidelidad === 'equivocado' ? 'selected' : '' ?>>⚠️ Números Equivocados / Inaccesibles (<?= $countNumEquivocado ?>)</option>
+                        <option value="rechazo" <?= $filtroFidelidad === 'rechazo' ? 'selected' : '' ?>>🛑 Rechazaron la Encuesta (<?= $countRechazo ?>)</option>
                     </select>
                 </div>
                 <div class="col-md-4">
@@ -226,7 +303,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                             <th>Rondas Tomadas</th>
                             <th>Primer Voto Registrado</th>
                             <th>Último Voto Registrado</th>
-                            <th>Clasificación de Lealtad</th>
+                            <th>Clasificación de Lealtad / Estado</th>
                             <th class="text-center">Historial Completo</th>
                         </tr>
                     </thead>
@@ -236,8 +313,10 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                                 <td colspan="9" class="text-center py-4 text-muted">No se encontraron afiliados con encuestas registradas.</td>
                             </tr>
                         <?php else: ?>
-                            <?php foreach ($listaVotantesFidelidad as $vf): ?>
-                                <tr>
+                            <?php foreach ($listaVotantesFidelidad as $vf): 
+                                $esEspecial = strpos($vf['voto_ultimo'], 'No Contestó') !== false || strpos($vf['voto_ultimo'], 'Equivocado') !== false || strpos($vf['voto_ultimo'], 'Rechazó') !== false;
+                            ?>
+                                <tr class="<?= $esEspecial ? 'table-warning text-dark' : '' ?>">
                                     <td class="fw-bold text-dark"><?= e($vf['nombre_completo']) ?></td>
                                     <td><?= e($vf['cedula']) ?></td>
                                     <td><i class="fas fa-phone-alt me-1 text-muted small"></i><?= e($vf['celular']) ?></td>
@@ -248,12 +327,22 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                                     </td>
 
                                     <td><span class="badge bg-light text-dark border"><?= e($vf['voto_inicial']) ?></span></td>
-                                    <td><span class="badge bg-primary"><?= e($vf['voto_ultimo']) ?></span></td>
-
-                                    <!-- Clasificación de Lealtad -->
                                     <td>
-                                        <?php if ($vf['total_rondas'] == 1): ?>
-                                            <span class="badge bg-info text-white"><i class="fas fa-user-clock me-1"></i>1 Sola Toma</span>
+                                        <span class="badge <?= $esEspecial ? 'bg-warning text-dark' : 'bg-primary' ?>">
+                                            <?= e($vf['voto_ultimo']) ?>
+                                        </span>
+                                    </td>
+
+                                    <!-- Clasificación de Lealtad y Estado -->
+                                    <td>
+                                        <?php if (strpos($vf['voto_ultimo'], 'No Contestó') !== false): ?>
+                                            <span class="badge bg-warning text-dark py-1 px-2 fs-6"><i class="fas fa-phone-slash me-1"></i>No Contestó (Reintentar)</span>
+                                        <?php elseif (strpos($vf['voto_ultimo'], 'Equivocado') !== false): ?>
+                                            <span class="badge bg-danger py-1 px-2 fs-6"><i class="fas fa-exclamation-triangle me-1"></i>Núm. Equivocado</span>
+                                        <?php elseif (strpos($vf['voto_ultimo'], 'Rechazó') !== false): ?>
+                                            <span class="badge bg-secondary py-1 px-2 fs-6"><i class="fas fa-ban me-1"></i>Rechazó Encuesta</span>
+                                        <?php elseif ($vf['total_rondas'] == 1): ?>
+                                            <span class="badge bg-info text-white py-1 px-2"><i class="fas fa-user-clock me-1"></i>1 Sola Toma (<?= e($vf['voto_ultimo']) ?>)</span>
                                         <?php elseif ($vf['candidatos_distintos'] == 1 && strpos(strtolower($vf['voto_ultimo']), 'indeciso') === false): ?>
                                             <span class="badge bg-success py-1 px-2 fs-6"><i class="fas fa-user-check me-1"></i>Votante Fiel (<?= e($vf['voto_ultimo']) ?>)</span>
                                         <?php elseif ($vf['candidatos_distintos'] > 1): ?>
@@ -275,7 +364,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                 </table>
             </div>
 
-            <!-- Navegación de Paginación Inteligente (123 Páginas compactadas) -->
+            <!-- Navegación de Paginación Inteligente -->
             <?php if ($totalPaginas > 1): ?>
                 <nav aria-label="Navegación de lealtad" class="mt-4">
                     <ul class="pagination justify-content-center flex-wrap">
@@ -339,7 +428,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                             <tr>
                                 <th># Ronda</th>
                                 <th>Fecha y Hora</th>
-                                <th>Candidato Votado</th>
+                                <th>Candidato / Estado</th>
                                 <th>Estado Votación</th>
                                 <th>Encuestadora</th>
                                 <th>Observaciones / Comentarios Adicionales</th>
@@ -372,17 +461,20 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
         
         historialModal.show();
 
-        fetch('api_historial_votante.php?id=' + requeridoId)
+        fetch('api_historial_votante.php?id=' + referidoId)
             .then(res => res.json())
             .then(data => {
                 if (data.success && data.historial.length > 0) {
                     let html = '';
                     data.historial.forEach((item, index) => {
+                        const esNoContesto = item.candidato.includes('No Contestó') || item.candidato.includes('Equivocado') || item.candidato.includes('Rechazó');
+                        const badgeClass = esNoContesto ? 'bg-warning text-dark' : 'bg-primary';
+                        
                         html += `
                             <tr>
-                                <td class="fw-bold">Ronda #${index + 1}</td>
+                                <td class="fw-bold">Ronda #${item.numero_ronda || (index + 1)}</td>
                                 <td class="small text-muted"><i class="far fa-clock me-1"></i>${item.fecha}</td>
-                                <td><span class="badge bg-primary">${item.candidato}</span></td>
+                                <td><span class="badge ${badgeClass}">${item.candidato}</span></td>
                                 <td><span class="badge bg-light text-dark border">${item.votante_yopal}</span></td>
                                 <td class="small text-muted"><i class="fas fa-headset me-1 text-success"></i>${item.encuestadora}</td>
                                 <td class="small text-dark italic">${item.observaciones || '<span class="text-muted">Sin observaciones</span>'}</td>

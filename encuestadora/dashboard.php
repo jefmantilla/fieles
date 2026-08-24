@@ -9,10 +9,12 @@ $encuestadora = getCurrentUser();
 $pdo = getDB();
 $csrfToken = generateCSRFToken();
 
-// Leer y limpiar mensajes de sesión (Patrón PRG: Post-Redirect-Get)
+// Leer y limpiar mensajes de sesión (Patrón PRG)
 $msg = $_SESSION['toast_msg'] ?? '';
 $error = $_SESSION['toast_error'] ?? '';
 unset($_SESSION['toast_msg'], $_SESSION['toast_error']);
+
+$modoCola = sanitizeInput($_GET['modo'] ?? 'normal');
 
 // Obtener Configuración de URL Externa Dinámica
 $stmtConfigUrl = $pdo->query("SELECT url_consulta_externa FROM configuracion_encuestas WHERE id = 1");
@@ -48,6 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
         $candidato = sanitizeInput($_POST['candidato'] ?? '');
         $votanteRespuesta = sanitizeInput($_POST['votante_yopal_respuesta'] ?? '');
         $observaciones = sanitizeInput($_POST['observaciones'] ?? '');
+        $modoOrigen = sanitizeInput($_POST['modo_origen'] ?? 'normal');
 
         if (empty($referidoId) || empty($candidato) || empty($votanteRespuesta)) {
             $_SESSION['toast_error'] = "Por favor seleccione la opción de candidato / resultado de llamada y confirme el lugar de votación.";
@@ -73,8 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
             }
         }
     }
-    // Redirección PRG para evitar que F5 vuelva a enviar el formulario o repetir la alerta
-    header("Location: dashboard.php");
+    header("Location: dashboard.php?modo=" . urlencode($modoOrigen));
     exit();
 }
 
@@ -92,26 +94,7 @@ $stmtCountTotal = $pdo->prepare("SELECT COUNT(*) FROM respuestas_encuestas WHERE
 $stmtCountTotal->execute([$encuestadora['id']]);
 $encuestasTotal = $stmtCountTotal->fetchColumn();
 
-// 3. Obtener el SIGUIENTE referido pendiente por encuestar EN LA RONDA ACTIVA
-$sqlSiguiente = "
-    SELECT r.*, 
-           CONCAT(r.nombres, ' ', r.apellidos) as nombre_completo,
-           (SELECT MAX(creado_en) FROM respuestas_encuestas WHERE referido_id = r.id) as ultima_encuesta,
-           (SELECT COUNT(*) FROM respuestas_encuestas WHERE referido_id = r.id) as total_rondas_previas
-    FROM referidos r
-    WHERE r.id NOT IN (
-        SELECT referido_id 
-        FROM respuestas_encuestas 
-        WHERE ronda_id = ?
-    )
-    ORDER BY r.id ASC
-    LIMIT 1
-";
-$stmtSiguiente = $pdo->prepare($sqlSiguiente);
-$stmtSiguiente->execute([$rondaActiva['id']]);
-$personaActual = $stmtSiguiente->fetch();
-
-// 4. Conteo de Pendientes en la Ronda Activa
+// 3. Conteo de Pendientes Iniciales en la Ronda Activa
 $stmtPendientes = $pdo->prepare("
     SELECT COUNT(*) 
     FROM referidos r
@@ -123,6 +106,65 @@ $stmtPendientes = $pdo->prepare("
 ");
 $stmtPendientes->execute([$rondaActiva['id']]);
 $totalPendientesRonda = $stmtPendientes->fetchColumn();
+
+// 4. Conteo de Afiliados que NO CONTESTARON en su última llamada de esta Ronda Activa
+$stmtCountReintentos = $pdo->prepare("
+    SELECT COUNT(*) 
+    FROM respuestas_encuestas re
+    WHERE re.ronda_id = ? 
+      AND re.candidato_elegido LIKE '%No Contestó%'
+      AND re.id = (
+          SELECT MAX(id) 
+          FROM respuestas_encuestas 
+          WHERE referido_id = re.referido_id AND ronda_id = ?
+      )
+");
+$stmtCountReintentos->execute([$rondaActiva['id'], $rondaActiva['id']]);
+$totalReintentosPendientes = $stmtCountReintentos->fetchColumn();
+
+// 5. Obtener la Persona a Encuestar según la Cola Seleccionada (Normal vs Reintento No Contestaron)
+if ($modoCola === 'reintento_nocontesto') {
+    $sqlSiguiente = "
+        SELECT r.*, 
+               CONCAT(r.nombres, ' ', r.apellidos) as nombre_completo,
+               re.creado_en as ultima_encuesta,
+               re.observaciones as ultima_observacion,
+               (SELECT COUNT(*) FROM respuestas_encuestas WHERE referido_id = r.id) as total_rondas_previas
+        FROM referidos r
+        JOIN respuestas_encuestas re ON re.referido_id = r.id
+        WHERE re.ronda_id = ?
+          AND re.candidato_elegido LIKE '%No Contestó%'
+          AND re.id = (
+              SELECT MAX(id) 
+              FROM respuestas_encuestas 
+              WHERE referido_id = r.id AND ronda_id = ?
+          )
+        ORDER BY re.creado_en ASC
+        LIMIT 1
+    ";
+    $stmtSiguiente = $pdo->prepare($sqlSiguiente);
+    $stmtSiguiente->execute([$rondaActiva['id'], $rondaActiva['id']]);
+    $personaActual = $stmtSiguiente->fetch();
+} else {
+    $sqlSiguiente = "
+        SELECT r.*, 
+               CONCAT(r.nombres, ' ', r.apellidos) as nombre_completo,
+               (SELECT MAX(creado_en) FROM respuestas_encuestas WHERE referido_id = r.id) as ultima_encuesta,
+               NULL as ultima_observacion,
+               (SELECT COUNT(*) FROM respuestas_encuestas WHERE referido_id = r.id) as total_rondas_previas
+        FROM referidos r
+        WHERE r.id NOT IN (
+            SELECT referido_id 
+            FROM respuestas_encuestas 
+            WHERE ronda_id = ?
+        )
+        ORDER BY r.id ASC
+        LIMIT 1
+    ";
+    $stmtSiguiente = $pdo->prepare($sqlSiguiente);
+    $stmtSiguiente->execute([$rondaActiva['id']]);
+    $personaActual = $stmtSiguiente->fetch();
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -188,6 +230,24 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
 
 <div class="container py-4" style="max-width: 850px;">
 
+    <!-- Selector de Modo de Cola: Iniciales vs Reintento de No Contestaron -->
+    <div class="card card-custom mb-4 shadow-sm border">
+        <div class="card-body p-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+                <h6 class="fw-bold mb-0 text-dark"><i class="fas fa-layer-group text-primary me-2"></i>Modo de Trabajo en Ronda #<?= $rondaActiva['numero_ronda'] ?>:</h6>
+                <span class="small text-muted">Seleccione la cola de llamadas que desea procesar</span>
+            </div>
+            <div class="btn-group" role="group" aria-label="Selector de cola">
+                <a href="dashboard.php?modo=normal" class="btn <?= $modoCola !== 'reintento_nocontesto' ? 'btn-primary active' : 'btn-outline-primary' ?> btn-sm fw-bold">
+                    <i class="fas fa-users me-1"></i> Cola Inicial (<?= $totalPendientesRonda ?>)
+                </a>
+                <a href="dashboard.php?modo=reintento_nocontesto" class="btn <?= $modoCola === 'reintento_nocontesto' ? 'btn-warning text-dark active' : 'btn-outline-warning text-dark' ?> btn-sm fw-bold">
+                    <i class="fas fa-redo me-1"></i> Reintentar No Contestaron (<?= $totalReintentosPendientes ?>)
+                </a>
+            </div>
+        </div>
+    </div>
+
     <!-- Tira de Contador Personal, Ronda Activa y Pendientes -->
     <div class="row g-3 mb-4">
         <div class="col-md-3">
@@ -208,11 +268,11 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
             <div class="card card-custom bg-white border-start border-4 border-warning p-3 shadow-sm h-100">
                 <div class="d-flex align-items-center justify-content-between">
                     <div>
-                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Pendientes Ronda</h6>
-                        <h3 class="fw-bold text-warning text-dark mb-0"><?= $totalPendientesRonda ?></h3>
+                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Reintentos No Contestó</h6>
+                        <h3 class="fw-bold text-warning text-dark mb-0"><?= $totalReintentosPendientes ?></h3>
                     </div>
                     <div class="text-warning p-2 rounded-circle" style="background-color: #fff8e1;">
-                        <i class="fas fa-user-clock fa-lg"></i>
+                        <i class="fas fa-phone-slash fa-lg"></i>
                     </div>
                 </div>
             </div>
@@ -250,12 +310,15 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
     <!-- TARJETA ÚNICA DE ENCUESTA -->
     <?php if ($personaActual): ?>
         <div class="card card-custom shadow-lg border mb-4">
-            <div class="card-header bg-dark text-white p-3 d-flex justify-content-between align-items-center">
+            <div class="card-header <?= $modoCola === 'reintento_nocontesto' ? 'bg-warning text-dark' : 'bg-dark text-white' ?> p-3 d-flex justify-content-between align-items-center">
                 <h5 class="fw-bold mb-0">
-                    <i class="fas fa-user-clock me-2 text-warning"></i>
-                    Encuesta Ronda #<?= $rondaActiva['numero_ronda'] ?> <?= $personaActual['total_rondas_previas'] > 0 ? '(Seguimiento #' . ($personaActual['total_rondas_previas'] + 1) . ')' : '(Inicial)' ?>
+                    <?php if ($modoCola === 'reintento_nocontesto'): ?>
+                        <i class="fas fa-redo me-2"></i> Reintento de Llamada No Respondida (Ronda #<?= $rondaActiva['numero_ronda'] ?>)
+                    <?php else: ?>
+                        <i class="fas fa-user-clock me-2 text-warning"></i> Encuesta Ronda #<?= $rondaActiva['numero_ronda'] ?> <?= $personaActual['total_rondas_previas'] > 0 ? '(Seguimiento #' . ($personaActual['total_rondas_previas'] + 1) . ')' : '(Inicial)' ?>
+                    <?php endif; ?>
                 </h5>
-                <span class="badge bg-warning text-dark fs-6"><i class="fas fa-id-card me-1"></i>CC: <?= e($personaActual['cedula']) ?></span>
+                <span class="badge <?= $modoCola === 'reintento_nocontesto' ? 'bg-dark text-white' : 'bg-warning text-dark' ?> fs-6"><i class="fas fa-id-card me-1"></i>CC: <?= e($personaActual['cedula']) ?></span>
             </div>
             
             <div class="card-body p-4">
@@ -268,9 +331,13 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
                             <div class="text-muted small">
                                 <i class="fas fa-map-marker-alt me-1 text-danger"></i><strong>Sector:</strong> <?= e($personaActual['comuna']) ?>
                             </div>
-                            <?php if ($personaActual['ultima_encuesta']): ?>
+                            <?php if ($modoCola === 'reintento_nocontesto' && !empty($personaActual['ultima_observacion'])): ?>
+                                <div class="small text-warning text-dark fw-bold mt-1">
+                                    <i class="fas fa-history me-1"></i>Nota del intento previo: <em><?= e($personaActual['ultima_observacion']) ?></em>
+                                </div>
+                            <?php elseif ($personaActual['ultima_encuesta']): ?>
                                 <div class="small text-muted mt-1">
-                                    <i class="far fa-clock me-1 text-info"></i>Última respuesta: <strong><?= date('d/m/Y', strtotime($personaActual['ultima_encuesta'])) ?></strong>
+                                    <i class="far fa-clock me-1 text-info"></i>Último intento: <strong><?= date('d/m/Y H:i', strtotime($personaActual['ultima_encuesta'])) ?></strong>
                                 </div>
                             <?php endif; ?>
                         </div>
@@ -287,11 +354,12 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
                     <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
                     <input type="hidden" name="accion" value="guardar_encuesta">
                     <input type="hidden" name="referido_id" value="<?= $personaActual['id'] ?>">
+                    <input type="hidden" name="modo_origen" value="<?= e($modoCola) ?>">
 
-                    <!-- SELECCIÓN DE CANDIDATO O ESTADO DE LA LLAMADA (INTEGRADO CON SELECCIÓN VISUAL) -->
+                    <!-- SELECCIÓN DE CANDIDATO O ESTADO DE LA LLAMADA -->
                     <div class="mb-4">
                         <label class="form-label fw-bold text-dark fs-6 mb-2">
-                            <i class="fas fa-question-circle me-2 text-primary"></i>¿Si las votaciones fueran hoy, por cuál candidato o grupo político votarías? (o seleccione estado de llamada) *
+                            <i class="fas fa-question-circle me-2 text-primary"></i>¿Si las votaciones fueran hoy, por cuál candidato o grupo político votarías? (o seleccione resultado de llamada) *
                         </label>
 
                         <!-- CANDIDATOS POLÍTICOS -->
@@ -340,7 +408,7 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
                         </div>
                     </div>
 
-                    <!-- Preguntas Adicionales Configuradas por AdminEncuestas (si existen) -->
+                    <!-- Preguntas Adicionales Configuradas por AdminEncuestas -->
                     <?php if (!empty($preguntasAdicionales)): ?>
                         <?php foreach ($preguntasAdicionales as $numP => $preg): ?>
                             <div class="mb-4 p-3 border rounded bg-light">
@@ -361,7 +429,7 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
                         <?php endforeach; ?>
                     <?php endif; ?>
 
-                    <!-- Pregunta Estado de Votación en Yopal (SIEMPRE SE SELECCIONA Y ACTUALIZA LA BASE DE DATOS) -->
+                    <!-- Pregunta Estado de Votación en Yopal -->
                     <div class="mb-4 p-3 border rounded bg-white">
                         <label class="form-label fw-bold text-dark fs-6 mb-2">
                             <i class="fas fa-vote-yea me-2 text-success"></i>Confirmar / Actualizar Estado de Votación en Yopal *
@@ -395,25 +463,31 @@ $totalPendientesRonda = $stmtPendientes->fetchColumn();
                     <!-- Observaciones o Comentarios Adicionales -->
                     <div class="mb-4">
                         <label for="observaciones" class="form-label fw-bold text-dark small"><i class="fas fa-comment-alt me-1 text-primary"></i>Observaciones o Comentarios adicionales:</label>
-                        <textarea name="observaciones" id="observaciones" class="form-control" rows="3" placeholder="Escriba aquí cualquier detalle o comentario de la llamada..."></textarea>
+                        <textarea name="observaciones" id="observaciones" class="form-control" rows="3" placeholder="Escriba detalles del intento de llamada..."></textarea>
                     </div>
 
                     <!-- Botón Único de Guardar Registro -->
                     <button type="submit" class="btn btn-success btn-lg btn-block fw-bold shadow-0 py-3 mb-3">
-                        <i class="fas fa-save me-2"></i> Guardar Registro de Llamada y Siguiente Persona
+                        <i class="fas fa-save me-2"></i> Guardar Registro y Siguiente Persona
                     </button>
                 </form>
 
             </div>
         </div>
     <?php else: ?>
-        <!-- Mensaje de Fin de Lista de Encuestas para la Ronda Activa -->
+        <!-- Mensaje cuando la cola seleccionada está vacía -->
         <div class="card card-custom shadow-sm border text-center p-5 mb-4">
             <div class="card-body d-flex flex-column align-items-center justify-content-center">
                 <i class="fas fa-check-double fa-4x text-success mb-3"></i>
-                <h3 class="fw-bold text-dark">¡Todas las Encuestas de la Ronda #<?= $rondaActiva['numero_ronda'] ?> han sido Procesadas!</h3>
-                <p class="text-muted">No hay más afiliados pendientes en la ronda actual. En cuanto el Administrador inicie la siguiente ronda de re-encuestas, aparecerán aquí automáticamente.</p>
-                <a href="dashboard.php" class="btn btn-primary"><i class="fas fa-sync-alt me-1"></i> Verificar Actualizaciones</a>
+                <?php if ($modoCola === 'reintento_nocontesto'): ?>
+                    <h3 class="fw-bold text-dark">¡No hay llamadas pendientes en la Cola de Reintento!</h3>
+                    <p class="text-muted">Todos los afiliados marcados como "No Contestó" han sido reintentados o ya dieron su respuesta en la Ronda #<?= $rondaActiva['numero_ronda'] ?>.</p>
+                    <a href="dashboard.php?modo=normal" class="btn btn-primary"><i class="fas fa-users me-1"></i> Volver a Cola Inicial</a>
+                <?php else: ?>
+                    <h3 class="fw-bold text-dark">¡Todas las Encuestas Iniciales de la Ronda #<?= $rondaActiva['numero_ronda'] ?> han sido Procesadas!</h3>
+                    <p class="text-muted">No hay más afiliados pendientes iniciales. Puedes cambiar al <strong>Modo Reintentar No Contestaron</strong> para volver a llamar a quienes no respondieron previamente.</p>
+                    <a href="dashboard.php?modo=reintento_nocontesto" class="btn btn-warning text-dark fw-bold"><i class="fas fa-redo me-1"></i> Ir a Cola de Reintento (<?= $totalReintentosPendientes ?>)</a>
+                <?php endif; ?>
             </div>
         </div>
     <?php endif; ?>
