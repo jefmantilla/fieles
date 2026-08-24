@@ -1,7 +1,7 @@
 <?php
 /**
  * Configuración de Conexión a la Base de Datos mediante PDO
- * Con medidas de alta seguridad para entorno local y producción (Hostinger)
+ * Compatible con entorno local (XAMPP) y producción (Hostinger)
  */
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -32,25 +32,27 @@ function getDB() {
                 PDO::ATTR_EMULATE_PREPARES   => false,
             ];
 
-            // Intentar conexión directa con DB_NAME especificada
             try {
                 $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";port=" . DB_PORT . ";charset=utf8mb4";
                 $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
             } catch (PDOException $eDirect) {
-                // Si la BD no existe localmente, intentar crearla
-                $dsnRaw = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";charset=utf8mb4";
-                $pdoRaw = new PDO($dsnRaw, DB_USER, DB_PASS, $options);
-                $pdoRaw->exec("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-                $pdoRaw->exec("USE `" . DB_NAME . "`");
-                $pdo = $pdoRaw;
+                global $isLocal;
+                if ($isLocal) {
+                    $dsnRaw = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";charset=utf8mb4";
+                    $pdoRaw = new PDO($dsnRaw, DB_USER, DB_PASS, $options);
+                    $pdoRaw->exec("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+                    $pdoRaw->exec("USE `" . DB_NAME . "`");
+                    $pdo = $pdoRaw;
+                } else {
+                    throw $eDirect;
+                }
             }
 
-            // Auto-instalar tablas si no existen
+            // Inicializar las tablas si no existen
             initTables($pdo);
 
         } catch (PDOException $e) {
-            error_log("Error de conexión a BD: " . $e->getMessage());
-            die("Error crítico de conexión a la base de datos. Por favor intente más tarde.");
+            die("<strong>Error de Conexión a Base de Datos:</strong> " . htmlspecialchars($e->getMessage()));
         }
     }
     return $pdo;
@@ -64,24 +66,23 @@ function initTables($pdo) {
             if (file_exists($schemaFile)) {
                 $sql = file_get_contents($schemaFile);
                 
-                // Eliminar comentarios SQL de una línea y de bloque
-                $sql = preg_replace('/--.*$/m', '', $sql);
-                $sql = preg_replace('/\/\*!?[^*]*\*+\//m', '', $sql);
+                // Limpiar comentarios de volcado
+                $sql = preg_replace('/^--.*$/m', '', $sql);
+                $sql = preg_replace('/^\/\*!.*$/m', '', $sql);
                 
-                // Dividir en sentencias individuales por punto y coma
                 $statements = array_filter(array_map('trim', explode(';', $sql)));
                 foreach ($statements as $stmtSql) {
                     if (!empty($stmtSql)) {
                         try {
                             $pdo->exec($stmtSql);
                         } catch (Exception $eStmt) {
-                            error_log("Aviso init SQL: " . $eStmt->getMessage());
+                            error_log("Aviso en init tables: " . $eStmt->getMessage());
                         }
                     }
                 }
             }
         }
     } catch (Exception $e) {
-        error_log("Error al verificar/inicializar tablas: " . $e->getMessage());
+        error_log("Error verificando tablas: " . $e->getMessage());
     }
 }
