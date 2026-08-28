@@ -38,6 +38,11 @@ if (!isset($activeTab)) {
                         <i class="fas fa-cog me-1 text-light"></i> Configuración de Rondas
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link nav-link-pill <?= $activeTab === 'afiliados' ? 'active' : '' ?>" href="afiliados.php">
+                        <i class="fas fa-address-book me-1 text-warning"></i> Afiliados / Censo
+                    </a>
+                </li>
             </ul>
             
             <div class="d-flex align-items-center gap-2 py-1" style="font-size: 0.85rem;">

@@ -180,6 +180,8 @@ if ($rondaConsulta === 'todas') {
         SELECT r.*, 
                CONCAT(ref.nombres, ' ', ref.apellidos) as persona_nombre,
                ref.celular as persona_celular,
+               ref.puesto_votacion as persona_puesto,
+               ref.mesa_votacion as persona_mesa,
                u.nombre_completo as encuestadora_nombre,
                ro.numero_ronda
         FROM respuestas_encuestas r
@@ -198,6 +200,8 @@ if ($rondaConsulta === 'todas') {
         SELECT r.*, 
                CONCAT(ref.nombres, ' ', ref.apellidos) as persona_nombre,
                ref.celular as persona_celular,
+               ref.puesto_votacion as persona_puesto,
+               ref.mesa_votacion as persona_mesa,
                u.nombre_completo as encuestadora_nombre,
                ro.numero_ronda
         FROM respuestas_encuestas r
@@ -541,6 +545,8 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
                             <th>Fecha y Hora</th>
                             <th>Persona Encuestada</th>
                             <th>Celular</th>
+                            <th>Puesto Votación</th>
+                            <th>Mesa</th>
                             <th>Resultado / Candidato</th>
                             <th>Estado Votación</th>
                             <th>Encuestadora</th>
@@ -550,7 +556,7 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
                     <tbody>
                         <?php if (empty($ultimasRespuestas)): ?>
                             <tr>
-                                <td colspan="8" class="text-center py-4 text-muted">No se han registrado observaciones de llamadas en <?= e($tituloRondaConsulta) ?> aún.</td>
+                                <td colspan="10" class="text-center py-4 text-muted">No se han registrado observaciones de llamadas en <?= e($tituloRondaConsulta) ?> aún.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($ultimasRespuestas as $resp): 
@@ -561,6 +567,20 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
                                     <td class="small text-muted"><i class="far fa-clock me-1"></i><?= date('d/m/Y H:i', strtotime($resp['creado_en'])) ?></td>
                                     <td class="fw-bold"><?= e($resp['persona_nombre']) ?></td>
                                     <td><i class="fas fa-phone-alt me-1 text-muted small"></i><?= e($resp['persona_celular']) ?></td>
+                                    <td class="small">
+                                        <?php if (!empty($resp['persona_puesto'])): ?>
+                                            <i class="fas fa-building me-1 text-primary"></i><?= e($resp['persona_puesto']) ?>
+                                        <?php else: ?>
+                                            <span class="text-muted">Sin registrar</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-center">
+                                        <?php if (!empty($resp['persona_mesa'])): ?>
+                                            <span class="badge bg-info text-dark"><?= e($resp['persona_mesa']) ?></span>
+                                        <?php else: ?>
+                                            <span class="text-muted">—</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <span class="badge <?= $esEspecial ? 'bg-warning text-dark' : 'bg-primary' ?>">
                                             <?= e($resp['candidato_elegido']) ?>

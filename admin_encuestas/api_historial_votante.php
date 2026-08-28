@@ -19,7 +19,7 @@ if (!$referidoId) {
 }
 
 $stmt = $pdo->prepare("
-    SELECT r.id, r.candidato_elegido, r.votante_yopal_respuesta, r.observaciones, r.creado_en,
+    SELECT r.id, r.candidato_elegido, r.votante_yopal_respuesta, r.puesto_votacion, r.mesa_votacion, r.observaciones, r.creado_en,
            u.nombre_completo as encuestadora_nombre
     FROM respuestas_encuestas r
     JOIN usuarios u ON r.encuestadora_id = u.id
@@ -35,6 +35,8 @@ foreach ($rows as $row) {
         'id' => $row['id'],
         'candidato' => $row['candidato_elegido'],
         'votante_yopal' => $row['votante_yopal_respuesta'],
+        'puesto_votacion' => $row['puesto_votacion'],
+        'mesa_votacion' => $row['mesa_votacion'],
         'observaciones' => $row['observaciones'],
         'encuestadora' => $row['encuestadora_nombre'],
         'fecha' => date('d/m/Y H:i', strtotime($row['creado_en']))

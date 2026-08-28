@@ -49,24 +49,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
         $referidoId = (int)($_POST['referido_id'] ?? 0);
         $candidato = sanitizeInput($_POST['candidato'] ?? '');
         $votanteRespuesta = sanitizeInput($_POST['votante_yopal_respuesta'] ?? '');
+        $puestoVotacion = sanitizeInput($_POST['puesto_votacion'] ?? '');
+        $mesaVotacion = sanitizeInput($_POST['mesa_votacion'] ?? '');
         $observaciones = sanitizeInput($_POST['observaciones'] ?? '');
         $modoOrigen = sanitizeInput($_POST['modo_origen'] ?? 'normal');
 
-        if (empty($referidoId) || empty($candidato) || empty($votanteRespuesta)) {
-            $_SESSION['toast_error'] = "Por favor seleccione la opción de candidato / resultado de llamada y confirme el lugar de votación.";
+        // Exenciones de llenado obligatorio (No Contestó o Cédula Falsa)
+        $esExentoCampos = (strpos($candidato, 'No Contestó') !== false || strpos($candidato, 'Cédula Falsa') !== false);
+
+        if (empty($referidoId) || empty($candidato)) {
+            $_SESSION['toast_error'] = "Por favor seleccione el resultado de la llamada o el candidato.";
+        } elseif (!$esExentoCampos && (empty($votanteRespuesta) || empty($puestoVotacion) || empty($mesaVotacion))) {
+            $_SESSION['toast_error'] = "Todos los campos de votación (Estado en Yopal, PUESTO y MESA) son obligatorios excepto si selecciona 'No Contestó' o 'Cédula Falsa'.";
         } else {
             $pdo->beginTransaction();
             try {
                 // 1. Guardar NUEVA respuesta vinculada a la Ronda Activa
                 $stmtIns = $pdo->prepare("
-                    INSERT INTO respuestas_encuestas (referido_id, ronda_id, encuestadora_id, candidato_elegido, votante_yopal_respuesta, observaciones) 
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO respuestas_encuestas (referido_id, ronda_id, encuestadora_id, candidato_elegido, votante_yopal_respuesta, puesto_votacion, mesa_votacion, observaciones) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ");
-                $stmtIns->execute([$referidoId, $rondaActiva['id'], $encuestadora['id'], $candidato, $votanteRespuesta, $observaciones]);
+                $stmtIns->execute([$referidoId, $rondaActiva['id'], $encuestadora['id'], $candidato, $votanteRespuesta, $puestoVotacion, $mesaVotacion, $observaciones]);
 
-                // 2. ACTUALIZAR SIEMPRE LA CASILLA votante_yopal EN LA TABLA referidos
-                $stmtUpdRef = $pdo->prepare("UPDATE referidos SET votante_yopal = ? WHERE id = ?");
-                $stmtUpdRef->execute([$votanteRespuesta, $referidoId]);
+                // 2. ACTUALIZAR LA CASILLA votante_yopal, puesto_votacion Y mesa_votacion EN LA TABLA referidos SI SE REGISTRARON
+                if (!empty($votanteRespuesta) || !empty($puestoVotacion) || !empty($mesaVotacion)) {
+                    $stmtUpdRef = $pdo->prepare("
+                        UPDATE referidos 
+                        SET votante_yopal = IF(? != '', ?, votante_yopal), 
+                            puesto_votacion = IF(? != '', ?, puesto_votacion), 
+                            mesa_votacion = IF(? != '', ?, mesa_votacion) 
+                        WHERE id = ?
+                    ");
+                    $stmtUpdRef->execute([$votanteRespuesta, $votanteRespuesta, $puestoVotacion, $puestoVotacion, $mesaVotacion, $mesaVotacion, $referidoId]);
+                }
 
                 $pdo->commit();
                 $_SESSION['toast_msg'] = "¡Registro de llamada guardado exitosamente!";
@@ -150,7 +165,7 @@ if ($modoCola === 'reintento_nocontesto') {
         SELECT r.*, 
                CONCAT(r.nombres, ' ', r.apellidos) as nombre_completo,
                (SELECT MAX(creado_en) FROM respuestas_encuestas WHERE referido_id = r.id) as ultima_encuesta,
-               NULL as ultima_observacion,
+               (SELECT observaciones FROM respuestas_encuestas WHERE referido_id = r.id ORDER BY id DESC LIMIT 1) as ultima_observacion,
                (SELECT COUNT(*) FROM respuestas_encuestas WHERE referido_id = r.id) as total_rondas_previas
         FROM referidos r
         WHERE r.id NOT IN (
@@ -200,6 +215,11 @@ if ($modoCola === 'reintento_nocontesto') {
             border-color: #ffc107 !important;
             background-color: #fff8e1 !important;
             box-shadow: 0 3px 8px rgba(255,193,7,0.3) !important;
+        }
+        .btn-check:checked + .cand-option-card.card-cedula-falsa {
+            border-color: #212529 !important;
+            background-color: #e9ecef !important;
+            box-shadow: 0 3px 8px rgba(33,37,41,0.3) !important;
         }
         .btn-check:checked + .cand-option-card.card-equivocado {
             border-color: #dc3545 !important;
@@ -331,6 +351,10 @@ if ($modoCola === 'reintento_nocontesto') {
                             <div class="text-muted small">
                                 <i class="fas fa-map-marker-alt me-1 text-danger"></i><strong>Sector:</strong> <?= e($personaActual['comuna']) ?>
                             </div>
+                            <div class="text-muted small mt-1">
+                                <i class="fas fa-building me-1 text-primary"></i><strong>Puesto actual:</strong> <?= !empty($personaActual['puesto_votacion']) ? e($personaActual['puesto_votacion']) : '<span class="text-muted">Sin registrar</span>' ?> | 
+                                <i class="fas fa-sort-numeric-up me-1 text-primary"></i><strong>Mesa:</strong> <?= !empty($personaActual['mesa_votacion']) ? e($personaActual['mesa_votacion']) : '<span class="text-muted">N/A</span>' ?>
+                            </div>
                             <?php if ($modoCola === 'reintento_nocontesto' && !empty($personaActual['ultima_observacion'])): ?>
                                 <div class="small text-warning text-dark fw-bold mt-1">
                                     <i class="fas fa-history me-1"></i>Nota del intento previo: <em><?= e($personaActual['ultima_observacion']) ?></em>
@@ -350,7 +374,7 @@ if ($modoCola === 'reintento_nocontesto') {
                 </div>
 
                 <!-- Formulario Principal -->
-                <form action="dashboard.php" method="POST">
+                <form action="dashboard.php" method="POST" id="formEncuesta">
                     <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
                     <input type="hidden" name="accion" value="guardar_encuesta">
                     <input type="hidden" name="referido_id" value="<?= $personaActual['id'] ?>">
@@ -378,31 +402,42 @@ if ($modoCola === 'reintento_nocontesto') {
                             <?php endforeach; ?>
                         </div>
 
-                        <!-- ESTADOS DE LLAMADA SIN VOTO / NO CONTESTÓ -->
+                        <!-- ESTADOS DE LLAMADA SIN VOTO / NO CONTESTÓ / CÉDULA FALSA -->
                         <div class="row g-2 border-top pt-2">
-                            <div class="col-12"><span class="fw-bold text-muted small text-uppercase mb-1 d-block"><i class="fas fa-phone-slash me-1 text-warning"></i>Opciones de Estado de Llamada (No Contestó / Sin Voto):</span></div>
+                            <div class="col-12 d-flex justify-content-between align-items-center mb-1">
+                                <span class="fw-bold text-muted small text-uppercase"><i class="fas fa-phone-slash me-1 text-warning"></i>Opciones de Estado de Llamada (No Contestó / Cédula Falsa / Sin Voto):</span>
+                                <span id="badgeExencionCampos" class="badge bg-info text-dark d-none"><i class="fas fa-info-circle me-1"></i>Exento de llenar Puesto y Mesa</span>
+                            </div>
 
-                            <div class="col-md-4 col-12">
+                            <div class="col-md-3 col-6">
                                 <input type="radio" class="btn-check" name="candidato" id="opt_no_contesto" value="No Contestó / Sin Respuesta" required>
                                 <label class="cand-option-card card-no-contesto border-warning w-100 d-block" for="opt_no_contesto">
                                     <div class="fw-bold text-dark small"><i class="fas fa-phone-slash text-warning me-1"></i>No Contestó</div>
-                                    <div class="text-muted" style="font-size: 0.75rem;">Sin respuesta / Ocupado</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">Sin respuesta</div>
                                 </label>
                             </div>
 
-                            <div class="col-md-4 col-12">
+                            <div class="col-md-3 col-6">
+                                <input type="radio" class="btn-check" name="candidato" id="opt_cedula_falsa" value="Cédula Falsa / Inexistente" required>
+                                <label class="cand-option-card card-cedula-falsa border-dark w-100 d-block" for="opt_cedula_falsa">
+                                    <div class="fw-bold text-dark small"><i class="fas fa-user-times text-danger me-1"></i>Cédula Falsa</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">Errónea / Inexistente</div>
+                                </label>
+                            </div>
+
+                            <div class="col-md-3 col-6">
                                 <input type="radio" class="btn-check" name="candidato" id="opt_equivocado" value="Número Equivocado / Inaccesible" required>
                                 <label class="cand-option-card card-equivocado border-danger w-100 d-block" for="opt_equivocado">
                                     <div class="fw-bold text-dark small"><i class="fas fa-exclamation-triangle text-danger me-1"></i>Núm. Equivocado</div>
-                                    <div class="text-muted" style="font-size: 0.75rem;">Fuera de servicio</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">Fuera de servicio</div>
                                 </label>
                             </div>
 
-                            <div class="col-md-4 col-12">
+                            <div class="col-md-3 col-6">
                                 <input type="radio" class="btn-check" name="candidato" id="opt_rechazo" value="No Desea Responder / Rechazó" required>
                                 <label class="cand-option-card card-rechazo border-secondary w-100 d-block" for="opt_rechazo">
                                     <div class="fw-bold text-dark small"><i class="fas fa-ban text-secondary me-1"></i>Rechazó Encuesta</div>
-                                    <div class="text-muted" style="font-size: 0.75rem;">No desea responder</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">No desea responder</div>
                                 </label>
                             </div>
                         </div>
@@ -413,24 +448,24 @@ if ($modoCola === 'reintento_nocontesto') {
                         <?php foreach ($preguntasAdicionales as $numP => $preg): ?>
                             <div class="mb-4 p-3 border rounded bg-light">
                                 <label class="form-label fw-bold text-dark small mb-2">
-                                    <i class="fas fa-question-circle me-1 text-info"></i><?= ($numP + 2) ?>. <?= e($preg['pregunta']) ?>
+                                    <i class="fas fa-question-circle me-1 text-info"></i><?= ($numP + 2) ?>. <?= e($preg['pregunta']) ?> *
                                 </label>
                                 <?php if (!empty($preg['opciones'])): ?>
                                     <?php $opts = explode(',', $preg['opciones']); foreach ($opts as $oKey => $optVal): ?>
                                         <div class="form-check">
-                                            <input class="form-check-input" type="radio" name="pregunta_extra_<?= $preg['id'] ?>" id="opt_<?= $preg['id'] ?>_<?= $oKey ?>" value="<?= e(trim($optVal)) ?>">
+                                            <input class="form-check-input" type="radio" name="pregunta_extra_<?= $preg['id'] ?>" id="opt_<?= $preg['id'] ?>_<?= $oKey ?>" value="<?= e(trim($optVal)) ?>" required>
                                             <label class="form-check-label" for="opt_<?= $preg['id'] ?>_<?= $oKey ?>"><?= e(trim($optVal)) ?></label>
                                         </div>
                                     <?php endforeach; ?>
                                 <?php else: ?>
-                                    <input type="text" name="pregunta_extra_<?= $preg['id'] ?>" class="form-control form-control-sm" placeholder="Respuesta del usuario...">
+                                    <input type="text" name="pregunta_extra_<?= $preg['id'] ?>" class="form-control form-control-sm" placeholder="Respuesta del usuario..." required>
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
                     <?php endif; ?>
 
                     <!-- Pregunta Estado de Votación en Yopal -->
-                    <div class="mb-4 p-3 border rounded bg-white">
+                    <div class="mb-4 p-3 border rounded bg-white" id="seccionEstadoVotacion">
                         <label class="form-label fw-bold text-dark fs-6 mb-2">
                             <i class="fas fa-vote-yea me-2 text-success"></i>Confirmar / Actualizar Estado de Votación en Yopal *
                         </label>
@@ -460,10 +495,64 @@ if ($modoCola === 'reintento_nocontesto') {
                         </div>
                     </div>
 
-                    <!-- Observaciones o Comentarios Adicionales -->
+                    <!-- CASILLAS OBLIGATORIAS PARA PUESTO DE VOTACIÓN Y NÚMERO DE MESA (Salvo No Contestó o Cédula Falsa) -->
+                    <div class="mb-4 p-3 border rounded bg-light" id="seccionPuestoMesa">
+                        <h6 class="fw-bold text-primary mb-3">
+                            <i class="fas fa-map-marked-alt me-2"></i>Lugar de Votación (Puesto y Mesa) *
+                        </h6>
+
+                        <?php if (!empty($personaActual['departamento']) || !empty($personaActual['municipio'])): ?>
+                        <!-- Datos del Censo (Solo lectura, extraídos del bot) -->
+                        <div class="row g-2 mb-3">
+                            <?php if (!empty($personaActual['departamento'])): ?>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-map me-1"></i>Departamento:</label>
+                                <div class="form-control form-control-sm bg-white text-muted border-0 border-bottom rounded-0 ps-0">
+                                    <?= e($personaActual['departamento']) ?>
+                                </div>
+                            </div>
+                            <?php endif; ?>
+                            <?php if (!empty($personaActual['municipio'])): ?>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-city me-1"></i>Municipio:</label>
+                                <div class="form-control form-control-sm bg-white text-muted border-0 border-bottom rounded-0 ps-0">
+                                    <?= e($personaActual['municipio']) ?>
+                                </div>
+                            </div>
+                            <?php endif; ?>
+                            <?php if (!empty($personaActual['direccion_votacion'])): ?>
+                            <div class="col-md-4">
+                                <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-road me-1"></i>Dirección:</label>
+                                <div class="form-control form-control-sm bg-white text-muted border-0 border-bottom rounded-0 ps-0">
+                                    <?= e($personaActual['direccion_votacion']) ?>
+                                </div>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                        <?php endif; ?>
+
+                        <div class="row g-3">
+                            <div class="col-md-8 col-12">
+                                <label for="puesto_votacion" class="form-label fw-bold text-dark small mb-1">
+                                    <i class="fas fa-building me-1 text-secondary"></i>PUESTO: *
+                                </label>
+                                <input type="text" name="puesto_votacion" id="puesto_votacion" class="form-control" placeholder="Nombre del puesto de votación (Colegio / Escuela)..." value="<?= e($personaActual['puesto_votacion'] ?? '') ?>" required>
+                            </div>
+                            <div class="col-md-4 col-12">
+                                <label for="mesa_votacion" class="form-label fw-bold text-dark small mb-1">
+                                    <i class="fas fa-sort-numeric-up me-1 text-secondary"></i>MESA: *
+                                </label>
+                                <input type="number" name="mesa_votacion" id="mesa_votacion" class="form-control" placeholder="Número de Mesa" min="1" max="500" value="<?= e($personaActual['mesa_votacion'] ?? '') ?>" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Observaciones o Comentarios Adicionales (OPCIONAL - PRECARGADO Y EDITABLE) -->
                     <div class="mb-4">
-                        <label for="observaciones" class="form-label fw-bold text-dark small"><i class="fas fa-comment-alt me-1 text-primary"></i>Observaciones o Comentarios adicionales:</label>
-                        <textarea name="observaciones" id="observaciones" class="form-control" rows="3" placeholder="Escriba detalles del intento de llamada..."></textarea>
+                        <label for="observaciones" class="form-label fw-bold text-dark small">
+                            <i class="fas fa-comment-alt me-1 text-primary"></i>Observaciones o Comentarios adicionales <span class="text-muted fw-normal">(Opcional - Modificable)</span>:
+                        </label>
+                        <textarea name="observaciones" id="observaciones" class="form-control" rows="3" placeholder="Escriba o modifique detalles adicionales del intento de llamada..."><?= e($personaActual['ultima_observacion'] ?? '') ?></textarea>
                     </div>
 
                     <!-- Botón Único de Guardar Registro -->
@@ -507,9 +596,40 @@ if ($modoCola === 'reintento_nocontesto') {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-<!-- Notificación Emergente CENTRADA con SweetAlert2 -->
+<!-- Notificación Emergente CENTRADA con SweetAlert2 y Lógica de Campos Obligatorios Dinámicos -->
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Lógica Dinámica de Campos Obligatorios vs Exención (No Contestó o Cédula Falsa)
+        const radioCandidatos = document.querySelectorAll('input[name="candidato"]');
+        const radioVotanteYopal = document.querySelectorAll('input[name="votante_yopal_respuesta"]');
+        const inputPuesto = document.getElementById('puesto_votacion');
+        const inputMesa = document.getElementById('mesa_votacion');
+        const badgeExencion = document.getElementById('badgeExencionCampos');
+
+        function actualizarRequeridos() {
+            const checkedCand = document.querySelector('input[name="candidato"]:checked');
+            const val = checkedCand ? checkedCand.value : '';
+            const esExento = (val === 'No Contestó / Sin Respuesta' || val === 'Cédula Falsa / Inexistente');
+
+            if (esExento) {
+                radioVotanteYopal.forEach(r => r.removeAttribute('required'));
+                if (inputPuesto) inputPuesto.removeAttribute('required');
+                if (inputMesa) inputMesa.removeAttribute('required');
+                if (badgeExencion) badgeExencion.classList.remove('d-none');
+            } else {
+                radioVotanteYopal.forEach(r => r.setAttribute('required', 'required'));
+                if (inputPuesto) inputPuesto.setAttribute('required', 'required');
+                if (inputMesa) inputMesa.setAttribute('required', 'required');
+                if (badgeExencion) badgeExencion.classList.add('d-none');
+            }
+        }
+
+        radioCandidatos.forEach(r => {
+            r.addEventListener('change', actualizarRequeridos);
+        });
+
+        actualizarRequeridos();
+
         <?php if (!empty($msg)): ?>
             Swal.fire({
                 title: '¡Registro de Encuesta Guardado!',
