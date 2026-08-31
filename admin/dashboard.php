@@ -1,44 +1,51 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/security.php';
 require_once __DIR__ . '/../config/auth.php';
 
 requireRole('Admin');
 
-$admin = getCurrentUser();
-$pdo = getDB();
+try {
+    $admin = getCurrentUser();
+    $pdo = getDB();
 
-// 1. Progreso de Referidos (Total)
-$stmtRef = $pdo->query("SELECT COUNT(*) FROM referidos");
-$totalReferidos = $stmtRef->fetchColumn();
+    // 1. Progreso de Referidos (Total)
+    $stmtRef = $pdo->query("SELECT COUNT(*) FROM referidos");
+    $totalReferidos = $stmtRef->fetchColumn();
 
-// 2. Progreso de Encuestas (Total Realizadas)
-$stmtEnc = $pdo->query("SELECT COUNT(*) FROM respuestas_encuestas");
-$totalEncuestas = $stmtEnc->fetchColumn();
+    // 2. Progreso de Encuestas (Total Realizadas)
+    $stmtEnc = $pdo->query("SELECT COUNT(*) FROM respuestas_encuestas");
+    $totalEncuestas = $stmtEnc->fetchColumn();
 
-// 3. Progreso de Referidos por Comuna
-$stmtComunas = $pdo->query("SELECT comuna, COUNT(*) as total FROM referidos GROUP BY comuna ORDER BY total DESC");
-$referidosPorComuna = $stmtComunas->fetchAll();
+    // 3. Progreso de Referidos por Comuna
+    $stmtComunas = $pdo->query("SELECT comuna, COUNT(*) as total FROM referidos GROUP BY comuna ORDER BY total DESC");
+    $referidosPorComuna = $stmtComunas->fetchAll();
 
-// 4. Resultados de Encuestas vs Contrincantes (Agrupado por candidato)
-$stmtCandidatos = $pdo->query("
-    SELECT candidato_elegido, COUNT(*) as votos 
-    FROM respuestas_encuestas 
-    WHERE candidato_elegido NOT LIKE '%No Contestó%' 
-      AND candidato_elegido NOT LIKE '%Cédula Falsa%'
-      AND candidato_elegido NOT LIKE '%Equivocado%'
-      AND candidato_elegido NOT LIKE '%Rechazó%'
-      AND candidato_elegido NOT LIKE '%WhatsApp%'
-    GROUP BY candidato_elegido 
-    ORDER BY votos DESC
-");
-$resultadosEncuestas = $stmtCandidatos->fetchAll();
+    // 4. Resultados de Encuestas vs Contrincantes (Agrupado por candidato)
+    $stmtCandidatos = $pdo->query("
+        SELECT candidato_elegido, COUNT(*) as votos 
+        FROM respuestas_encuestas 
+        WHERE candidato_elegido NOT LIKE '%No Contestó%' 
+          AND candidato_elegido NOT LIKE '%Cédula Falsa%'
+          AND candidato_elegido NOT LIKE '%Equivocado%'
+          AND candidato_elegido NOT LIKE '%Rechazó%'
+          AND candidato_elegido NOT LIKE '%WhatsApp%'
+        GROUP BY candidato_elegido 
+        ORDER BY votos DESC
+    ");
+    $resultadosEncuestas = $stmtCandidatos->fetchAll();
 
-$totalVotosValidos = 0;
-foreach($resultadosEncuestas as $r) {
-    $totalVotosValidos += $r['votos'];
+    $totalVotosValidos = 0;
+    foreach($resultadosEncuestas as $r) {
+        $totalVotosValidos += $r['votos'];
+    }
+} catch (Exception $e) {
+    die("FATAL ERROR IN DASHBOARD: " . $e->getMessage() . " at line " . $e->getLine());
 }
-
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -69,7 +76,7 @@ foreach($resultadosEncuestas as $r) {
                 </li>
             </ul>
             <div class="d-flex align-items-center">
-                <span class="text-white me-3"><i class="fas fa-user-shield me-1 text-warning"></i><?= e($admin['nombre_completo']) ?></span>
+                <span class="text-white me-3"><i class="fas fa-user-shield me-1 text-warning"></i><?= e($admin['nombre_completo'] ?? '') ?></span>
                 <a href="../logout.php" class="btn btn-outline-light btn-sm"><i class="fas fa-sign-out-alt me-1"></i> Salir</a>
             </div>
         </div>
@@ -91,7 +98,7 @@ foreach($resultadosEncuestas as $r) {
                 <div class="card-body p-4 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold mb-1">Total Referidos</h6>
-                        <h2 class="fw-bold text-primary mb-0"><?= number_format($totalReferidos) ?></h2>
+                        <h2 class="fw-bold text-primary mb-0"><?= number_format($totalReferidos ?? 0) ?></h2>
                     </div>
                     <div class="p-3 bg-primary bg-opacity-10 rounded-circle">
                         <i class="fas fa-users fa-2x text-primary"></i>
@@ -104,7 +111,7 @@ foreach($resultadosEncuestas as $r) {
                 <div class="card-body p-4 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold mb-1">Encuestas Realizadas</h6>
-                        <h2 class="fw-bold text-success mb-0"><?= number_format($totalEncuestas) ?></h2>
+                        <h2 class="fw-bold text-success mb-0"><?= number_format($totalEncuestas ?? 0) ?></h2>
                     </div>
                     <div class="p-3 bg-success bg-opacity-10 rounded-circle">
                         <i class="fas fa-phone-volume fa-2x text-success"></i>
@@ -161,12 +168,12 @@ foreach($resultadosEncuestas as $r) {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach($referidosPorComuna as $com): ?>
+                                <?php if(isset($referidosPorComuna)): foreach($referidosPorComuna as $com): ?>
                                 <tr>
                                     <td class="fw-bold text-dark"><i class="fas fa-map-pin me-2 text-danger opacity-50"></i><?= e($com['comuna']) ?></td>
                                     <td class="text-end fw-bold text-primary"><?= number_format($com['total']) ?></td>
                                 </tr>
-                                <?php endforeach; ?>
+                                <?php endforeach; endif; ?>
                             </tbody>
                         </table>
                     </div>
