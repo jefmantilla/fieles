@@ -37,10 +37,17 @@ function requireLogin() {
     }
 }
 
+function hasRole($role) {
+    if (!isLoggedIn()) {
+        return false;
+    }
+    $user = getCurrentUser();
+    return $user && strtolower($user['role_name'] ?? '') === strtolower($role);
+}
+
 function requireRole($requiredRole) {
     requireLogin();
-    $user = getCurrentUser();
-    if (!$user || strtolower($user['role_name']) !== strtolower($requiredRole)) {
+    if (!hasRole($requiredRole)) {
         $base = getAppSubdir();
         header("Location: {$base}/index.php?error=acceso_denegado");
         exit();

@@ -1,4 +1,8 @@
 <?php
+$file = 'c:\xampp\htdocs\Aplicaiones\fieles\admin\dashboard.php';
+
+$newContent = <<<'PHP'
+<?php
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../config/security.php';
 require_once __DIR__ . '/../config/auth.php';
@@ -179,3 +183,8 @@ foreach($resultadosEncuestas as $r) {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+PHP;
+
+file_put_contents($file, $newContent);
+echo "ok";
+

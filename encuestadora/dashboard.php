@@ -16,9 +16,12 @@ unset($_SESSION['toast_msg'], $_SESSION['toast_error']);
 
 $modoCola = sanitizeInput($_GET['modo'] ?? 'normal');
 
-// Obtener Configuración de URL Externa Dinámica
-$stmtConfigUrl = $pdo->query("SELECT url_consulta_externa FROM configuracion_encuestas WHERE id = 1");
-$urlExternaActual = $stmtConfigUrl->fetchColumn();
+// Obtener Configuración de URL Externa Dinámica y Guión de Llamada
+$stmtConfigUrl = $pdo->query("SELECT url_consulta_externa, pregunta_candidato, guion_llamada FROM configuracion_encuestas WHERE id = 1");
+$configData = $stmtConfigUrl->fetch() ?: [];
+$urlExternaActual = $configData['url_consulta_externa'] ?? '';
+$preguntaCandidato = !empty($configData['pregunta_candidato']) ? $configData['pregunta_candidato'] : '¿Si las votaciones fueran hoy, por cuál candidato o grupo político votarías?';
+$guionLlamada = !empty($configData['guion_llamada']) ? $configData['guion_llamada'] : "Hola, muy buenas tardes. Mi nombre es Andrea de la firma de opinión Estelar. Nos comunicamos muy brevemente para realizarle un par de preguntas rápidas sobre el desarrollo y futuro de nuestro municipio como parte de un estudio local. ¿Nos concede solo 1 minuto de su tiempo?";
 
 if (empty($urlExternaActual)) {
     $codigoRefEncuestadora = !empty($encuestadora['codigo_referido']) ? $encuestadora['codigo_referido'] : 'LID-40FEA8AA';
@@ -54,8 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
         $observaciones = sanitizeInput($_POST['observaciones'] ?? '');
         $modoOrigen = sanitizeInput($_POST['modo_origen'] ?? 'normal');
 
-        // Exenciones de llenado obligatorio (No Contestó o Cédula Falsa)
-        $esExentoCampos = (strpos($candidato, 'No Contestó') !== false || strpos($candidato, 'Cédula Falsa') !== false);
+        // Exenciones de llenado obligatorio (Puesto y Mesa son gestionados automáticamente por el Bot)
+        $esExentoCampos = true;
 
         if (empty($referidoId) || empty($candidato)) {
             $_SESSION['toast_error'] = "Por favor seleccione el resultado de la llamada o el candidato.";
@@ -120,7 +123,17 @@ $stmtPendientes = $pdo->prepare("
     )
 ");
 $stmtPendientes->execute([$rondaActiva['id']]);
-$totalPendientesRonda = $stmtPendientes->fetchColumn();
+$totalPendientesRonda = (int)$stmtPendientes->fetchColumn();
+
+// Total en Ronda y Completadas en la Ronda Activa
+$stmtTotalR = $pdo->query("SELECT COUNT(*) FROM referidos");
+$totalRonda = (int)$stmtTotalR->fetchColumn();
+
+$stmtCompR = $pdo->prepare("SELECT COUNT(DISTINCT referido_id) FROM respuestas_encuestas WHERE ronda_id = ?");
+$stmtCompR->execute([$rondaActiva['id']]);
+$totalCompletadasRonda = (int)$stmtCompR->fetchColumn();
+
+$porcentajeAvance = $totalRonda > 0 ? round(($totalCompletadasRonda / $totalRonda) * 100, 1) : 0;
 
 // 4. Conteo de Afiliados que NO CONTESTARON en su última llamada de esta Ronda Activa
 $stmtCountReintentos = $pdo->prepare("
@@ -179,6 +192,38 @@ if ($modoCola === 'reintento_nocontesto') {
     $stmtSiguiente = $pdo->prepare($sqlSiguiente);
     $stmtSiguiente->execute([$rondaActiva['id']]);
     $personaActual = $stmtSiguiente->fetch();
+}
+
+// Generar o consultar Token Único de WhatsApp para la Persona Actual en la Ronda Activa
+$tokenWaData = null;
+$waUrl = '#';
+if (!empty($personaActual['id'])) {
+    $stmtTokSel = $pdo->prepare("SELECT * FROM encuestas_tokens_whatsapp WHERE referido_id = ? AND ronda_id = ?");
+    $stmtTokSel->execute([$personaActual['id'], $rondaActiva['id']]);
+    $tokenWaData = $stmtTokSel->fetch();
+
+    if (!$tokenWaData) {
+        $newToken = md5($personaActual['id'] . '_' . $rondaActiva['id'] . '_' . time() . '_' . rand(1000, 9999));
+        $stmtTokIns = $pdo->prepare("INSERT INTO encuestas_tokens_whatsapp (referido_id, ronda_id, encuestadora_id, token, estado) VALUES (?, ?, ?, ?, 'enviada')");
+        $stmtTokIns->execute([$personaActual['id'], $rondaActiva['id'], $encuestadora['id'], $newToken]);
+        $tokenWaData = ['token' => $newToken, 'estado' => 'enviada'];
+    }
+
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $publicLink = $scheme . '://' . $host . '/Aplicaiones/fieles/encuesta_publica.php?t=' . ($tokenWaData['token'] ?? '');
+
+    $speechLimpio = ltrim($guionLlamada);
+    if (stripos($speechLimpio, 'Hola') === 0) {
+        $speechLimpio = preg_replace('/^Hola,?\s*/i', '', $speechLimpio);
+    }
+    $nombreCiudadano = trim(($personaActual['nombres'] ?? '') . ' ' . ($personaActual['apellidos'] ?? ''));
+    $msgWaText = "Hola " . $nombreCiudadano . ", " . lcfirst($speechLimpio) . "\n\nIngrese a este enlace seguro para responder en 1 minuto:\n\n" . $publicLink . "\n\n¡Muchas gracias por su opinión!";
+    $celularLimpio = preg_replace('/[^0-9]/', '', $personaActual['celular'] ?? '');
+    if (strlen($celularLimpio) === 10 && strpos($celularLimpio, '57') !== 0) {
+        $celularLimpio = '57' . $celularLimpio;
+    }
+    $waUrl = "https://api.whatsapp.com/send?phone=" . $celularLimpio . "&text=" . urlencode($msgWaText);
 }
 ?>
 <!DOCTYPE html>
@@ -257,13 +302,20 @@ if ($modoCola === 'reintento_nocontesto') {
                 <h6 class="fw-bold mb-0 text-dark"><i class="fas fa-layer-group text-primary me-2"></i>Modo de Trabajo en Ronda #<?= $rondaActiva['numero_ronda'] ?>:</h6>
                 <span class="small text-muted">Seleccione la cola de llamadas que desea procesar</span>
             </div>
-            <div class="btn-group" role="group" aria-label="Selector de cola">
-                <a href="dashboard.php?modo=normal" class="btn <?= $modoCola !== 'reintento_nocontesto' ? 'btn-primary active' : 'btn-outline-primary' ?> btn-sm fw-bold">
-                    <i class="fas fa-users me-1"></i> Cola Inicial (<?= $totalPendientesRonda ?>)
-                </a>
-                <a href="dashboard.php?modo=reintento_nocontesto" class="btn <?= $modoCola === 'reintento_nocontesto' ? 'btn-warning text-dark active' : 'btn-outline-warning text-dark' ?> btn-sm fw-bold">
-                    <i class="fas fa-redo me-1"></i> Reintentar No Contestaron (<?= $totalReintentosPendientes ?>)
-                </a>
+            <div class="d-flex align-items-center gap-2">
+                <div class="btn-group" role="group" aria-label="Selector de cola">
+                    <a href="dashboard.php?modo=normal" class="btn <?= $modoCola !== 'reintento_nocontesto' ? 'btn-primary active' : 'btn-outline-primary' ?> btn-sm fw-bold">
+                        <i class="fas fa-users me-1"></i> Cola Inicial (<?= $totalPendientesRonda ?>)
+                    </a>
+                    <a href="dashboard.php?modo=reintento_nocontesto" class="btn <?= $modoCola === 'reintento_nocontesto' ? 'btn-warning text-dark active' : 'btn-outline-warning text-dark' ?> btn-sm fw-bold">
+                        <i class="fas fa-redo me-1"></i> Reintentar No Contestaron (<?= $totalReintentosPendientes ?>)
+                    </a>
+                </div>
+                <?php if ($personaActual): ?>
+                    <a href="dashboard.php?modo=<?= e($modoCola) ?>&skip=<?= $personaActual['id'] ?>" class="btn btn-outline-secondary btn-sm fw-bold" title="Saltar contacto actual">
+                        <i class="fas fa-forward me-1"></i>Saltar
+                    </a>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -327,19 +379,37 @@ if ($modoCola === 'reintento_nocontesto') {
         </div>
     </div>
 
-    <!-- TARJETA ÚNICA DE ENCUESTA -->
-    <?php if ($personaActual): ?>
-        <div class="card card-custom shadow-lg border mb-4">
-            <div class="card-header <?= $modoCola === 'reintento_nocontesto' ? 'bg-warning text-dark' : 'bg-dark text-white' ?> p-3 d-flex justify-content-between align-items-center">
-                <h5 class="fw-bold mb-0">
+    <?php if (!$personaActual): ?>
+        <!-- Mensaje cuando la cola está vacía -->
+        <div class="card shadow-sm border-0 text-center p-5">
+            <div class="card-body">
+                <div class="mb-3 text-success">
+                    <i class="fas fa-check-circle fa-4x"></i>
+                </div>
+                <h3 class="fw-bold text-dark">
+                    <?= $modoCola === 'reintento_nocontesto' ? '¡Sin reintentos pendientes!' : '¡Excelente trabajo! Has completado todas las llamadas asignadas.' ?>
+                </h3>
+                <p class="text-muted fs-6">
+                    <?= $modoCola === 'reintento_nocontesto' 
+                        ? 'No tienes contactos marcados como "No Contestó" pendientes por volver a llamar en esta ronda.' 
+                        : 'No hay más contactos pendientes en la Ronda #' . $rondaActiva['numero_ronda'] . '. Puedes revisar el panel de reintentos.' ?>
+                </p>
+                <div class="mt-3">
                     <?php if ($modoCola === 'reintento_nocontesto'): ?>
-                        <i class="fas fa-redo me-2"></i> Reintento de Llamada No Respondida (Ronda #<?= $rondaActiva['numero_ronda'] ?>)
+                        <a href="dashboard.php?modo=normal" class="btn btn-primary fw-bold"><i class="fas fa-arrow-left me-1"></i>Volver a Cola Normal</a>
                     <?php else: ?>
-                        <i class="fas fa-user-clock me-2 text-warning"></i> Encuesta Ronda #<?= $rondaActiva['numero_ronda'] ?> <?= $personaActual['total_rondas_previas'] > 0 ? '(Seguimiento #' . ($personaActual['total_rondas_previas'] + 1) . ')' : '(Inicial)' ?>
+                        <a href="dashboard.php?modo=reintento_nocontesto" class="btn btn-warning fw-bold text-dark"><i class="fas fa-redo-alt me-1"></i>Revisar Reintentos</a>
                     <?php endif; ?>
-                </h5>
-                <span class="badge <?= $modoCola === 'reintento_nocontesto' ? 'bg-dark text-white' : 'bg-warning text-dark' ?> fs-6"><i class="fas fa-id-card me-1"></i>CC: <?= e($personaActual['cedula']) ?></span>
+                </div>
             </div>
+        </div>
+    <?php else: ?>
+
+        <!-- Tarjeta Principal del Contacto Actual -->
+        <div class="card shadow-sm border-0 mb-4">
+            <!-- <div class="card-header bg-white py-3 border-0 d-flex justify-content-between align-items-center d-none"> 
+                 (Header ocultado por solicitud del usuario) 
+            </div> -->
             
             <div class="card-body p-4">
                 
@@ -348,13 +418,6 @@ if ($modoCola === 'reintento_nocontesto') {
                     <div class="row align-items-center">
                         <div class="col-md-7">
                             <h4 class="fw-bold text-primary mb-1"><?= e($personaActual['nombre_completo']) ?></h4>
-                            <div class="text-muted small">
-                                <i class="fas fa-map-marker-alt me-1 text-danger"></i><strong>Sector:</strong> <?= e($personaActual['comuna']) ?>
-                            </div>
-                            <div class="text-muted small mt-1">
-                                <i class="fas fa-building me-1 text-primary"></i><strong>Puesto actual:</strong> <?= !empty($personaActual['puesto_votacion']) ? e($personaActual['puesto_votacion']) : '<span class="text-muted">Sin registrar</span>' ?> | 
-                                <i class="fas fa-sort-numeric-up me-1 text-primary"></i><strong>Mesa:</strong> <?= !empty($personaActual['mesa_votacion']) ? e($personaActual['mesa_votacion']) : '<span class="text-muted">N/A</span>' ?>
-                            </div>
                             <?php if ($modoCola === 'reintento_nocontesto' && !empty($personaActual['ultima_observacion'])): ?>
                                 <div class="small text-warning text-dark fw-bold mt-1">
                                     <i class="fas fa-history me-1"></i>Nota del intento previo: <em><?= e($personaActual['ultima_observacion']) ?></em>
@@ -365,13 +428,35 @@ if ($modoCola === 'reintento_nocontesto') {
                                 </div>
                             <?php endif; ?>
                         </div>
-                        <div class="col-md-5 text-md-end mt-2 mt-md-0">
-                            <a href="tel:<?= e($personaActual['celular']) ?>" class="btn btn-success btn-lg fw-bold shadow-0 w-100 py-2">
-                                <i class="fas fa-phone-alt me-2"></i><?= e($personaActual['celular']) ?>
+                        <div class="col-md-5 text-md-end mt-2 mt-md-0 d-flex flex-column gap-2">
+                            <a href="tel:<?= e($personaActual['celular']) ?>" class="btn btn-success btn-md fw-bold shadow-0 py-2">
+                                <i class="fas fa-phone-alt me-2"></i>Llamar a <?= e($personaActual['celular']) ?>
                             </a>
+                            <a href="<?= e($waUrl) ?>" target="_blank" class="btn btn-outline-primary btn-md fw-bold shadow-0 py-2" onclick="document.getElementById('opt_wa_enviado').checked = true;" title="Enviar encuesta con enlace público">
+                                <i class="fas fa-globe me-2 fa-lg text-primary"></i>Enviar Formulario Web (WhatsApp)
+                            </a>
+                            <?php if (!empty($tokenWaData['token'])): ?>
+                                <button type="button" class="btn btn-outline-info btn-sm fw-bold shadow-0 py-1" onclick="simularBotonMetaWhatsApp('<?= $tokenWaData['token'] ?>')" title="Probar respuesta de botón interactivo Meta Cloud API">
+                                    <i class="fas fa-robot me-1"></i>Probar Botones Interactivos Meta API
+                                </button>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
+                <!-- GUIÓN / SPEECH OFICIAL PARA LA LLAMADA (CONFIGURADO DESDE EL ADMIN) -->
+                <?php if (!empty($guionLlamada)): ?>
+                    <div class="card border-primary mb-4 shadow-sm" style="background-color: #f0f7ff;">
+                        <div class="card-body p-3">
+                            <div class="d-flex align-items-center mb-1">
+                                <i class="fas fa-scroll text-primary me-2 fa-lg"></i>
+                                <h6 class="fw-bold text-primary mb-0 text-uppercase" style="font-size: 0.85rem; letter-spacing: 0.5px;">Guión / Speech Oficial para la Llamada:</h6>
+                            </div>
+                            <p class="mb-0 text-dark italic fw-bold" style="font-size: 0.95rem; line-height: 1.5; white-space: pre-line;">
+                                "<?= e($guionLlamada) ?>"
+                            </p>
+                        </div>
+                    </div>
+                <?php endif; ?>
 
                 <!-- Formulario Principal -->
                 <form action="dashboard.php" method="POST" id="formEncuesta">
@@ -380,10 +465,31 @@ if ($modoCola === 'reintento_nocontesto') {
                     <input type="hidden" name="referido_id" value="<?= $personaActual['id'] ?>">
                     <input type="hidden" name="modo_origen" value="<?= e($modoCola) ?>">
 
+                    <!-- Preguntas Adicionales Configuradas por AdminEncuestas -->
+                    <?php if (!empty($preguntasAdicionales)): ?>
+                        <?php foreach ($preguntasAdicionales as $numP => $preg): ?>
+                            <div class="mb-4 p-3 border rounded bg-light">
+                                <label class="form-label fw-bold text-dark small mb-2">
+                                    <i class="fas fa-question-circle me-1 text-info"></i><?= ($numP + 1) ?>. <?= e($preg['pregunta']) ?> *
+                                </label>
+                                <?php if (!empty($preg['opciones'])): ?>
+                                    <?php $opts = explode(',', $preg['opciones']); foreach ($opts as $oKey => $optVal): ?>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="radio" name="pregunta_extra_<?= $preg['id'] ?>" id="opt_<?= $preg['id'] ?>_<?= $oKey ?>" value="<?= e(trim($optVal)) ?>" required>
+                                            <label class="form-check-label" for="opt_<?= $preg['id'] ?>_<?= $oKey ?>"><?= e(trim($optVal)) ?></label>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <input type="text" name="pregunta_extra_<?= $preg['id'] ?>" class="form-control form-control-sm" placeholder="Respuesta del usuario..." required>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+
                     <!-- SELECCIÓN DE CANDIDATO O ESTADO DE LA LLAMADA -->
                     <div class="mb-4">
                         <label class="form-label fw-bold text-dark fs-6 mb-2">
-                            <i class="fas fa-question-circle me-2 text-primary"></i>¿Si las votaciones fueran hoy, por cuál candidato o grupo político votarías? (o seleccione resultado de llamada) *
+                            <i class="fas fa-question-circle me-2 text-primary"></i><?= e($preguntaCandidato) ?> *
                         </label>
 
                         <!-- CANDIDATOS POLÍTICOS -->
@@ -402,11 +508,27 @@ if ($modoCola === 'reintento_nocontesto') {
                             <?php endforeach; ?>
                         </div>
 
-                        <!-- ESTADOS DE LLAMADA SIN VOTO / NO CONTESTÓ / CÉDULA FALSA -->
+                        <!-- ESTADOS DE LLAMADA SIN VOTO / NO CONTESTÓ / CÉDULA FALSA / WHATSAPP -->
                         <div class="row g-2 border-top pt-2">
                             <div class="col-12 d-flex justify-content-between align-items-center mb-1">
-                                <span class="fw-bold text-muted small text-uppercase"><i class="fas fa-phone-slash me-1 text-warning"></i>Opciones de Estado de Llamada (No Contestó / Cédula Falsa / Sin Voto):</span>
+                                <span class="fw-bold text-muted small text-uppercase"><i class="fas fa-phone-slash me-1 text-warning"></i>Opciones de Estado de Llamada / WhatsApp:</span>
                                 <span id="badgeExencionCampos" class="badge bg-info text-dark d-none"><i class="fas fa-info-circle me-1"></i>Exento de llenar Puesto y Mesa</span>
+                            </div>
+
+                            <div class="col-md-3 col-6">
+                                <input type="radio" class="btn-check" name="candidato" id="opt_wa_enviado" value="Enviado Enlace Web / WhatsApp (En Espera)" required>
+                                <label class="cand-option-card border-success w-100 d-block" for="opt_wa_enviado">
+                                    <div class="fw-bold text-success small"><i class="fab fa-whatsapp me-1"></i>Enlace Web WhatsApp</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">En espera de respuesta</div>
+                                </label>
+                            </div>
+
+                            <div class="col-md-3 col-6">
+                                <input type="radio" class="btn-check" name="candidato" id="opt_wa_botones" value="Enviado Botones Meta API / WhatsApp (En Espera)" required>
+                                <label class="cand-option-card border-primary w-100 d-block" for="opt_wa_botones">
+                                    <div class="fw-bold text-primary small"><i class="fas fa-robot me-1"></i>Botones Meta API</div>
+                                    <div class="text-muted" style="font-size: 0.73rem;">En espera de respuesta</div>
+                                </label>
                             </div>
 
                             <div class="col-md-3 col-6">
@@ -417,7 +539,7 @@ if ($modoCola === 'reintento_nocontesto') {
                                 </label>
                             </div>
 
-                            <div class="col-md-3 col-6">
+                            <div class="col-md-3 col-6 d-none">
                                 <input type="radio" class="btn-check" name="candidato" id="opt_cedula_falsa" value="Cédula Falsa / Inexistente" required>
                                 <label class="cand-option-card card-cedula-falsa border-dark w-100 d-block" for="opt_cedula_falsa">
                                     <div class="fw-bold text-dark small"><i class="fas fa-user-times text-danger me-1"></i>Cédula Falsa</div>
@@ -443,29 +565,8 @@ if ($modoCola === 'reintento_nocontesto') {
                         </div>
                     </div>
 
-                    <!-- Preguntas Adicionales Configuradas por AdminEncuestas -->
-                    <?php if (!empty($preguntasAdicionales)): ?>
-                        <?php foreach ($preguntasAdicionales as $numP => $preg): ?>
-                            <div class="mb-4 p-3 border rounded bg-light">
-                                <label class="form-label fw-bold text-dark small mb-2">
-                                    <i class="fas fa-question-circle me-1 text-info"></i><?= ($numP + 2) ?>. <?= e($preg['pregunta']) ?> *
-                                </label>
-                                <?php if (!empty($preg['opciones'])): ?>
-                                    <?php $opts = explode(',', $preg['opciones']); foreach ($opts as $oKey => $optVal): ?>
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="radio" name="pregunta_extra_<?= $preg['id'] ?>" id="opt_<?= $preg['id'] ?>_<?= $oKey ?>" value="<?= e(trim($optVal)) ?>" required>
-                                            <label class="form-check-label" for="opt_<?= $preg['id'] ?>_<?= $oKey ?>"><?= e(trim($optVal)) ?></label>
-                                        </div>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <input type="text" name="pregunta_extra_<?= $preg['id'] ?>" class="form-control form-control-sm" placeholder="Respuesta del usuario..." required>
-                                <?php endif; ?>
-                            </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-
-                    <!-- Pregunta Estado de Votación en Yopal -->
-                    <div class="mb-4 p-3 border rounded bg-white" id="seccionEstadoVotacion">
+                            <!-- Pregunta Estado de Votación en Yopal -->
+                    <div class="mb-4 p-3 border rounded bg-white d-none" id="seccionEstadoVotacion">
                         <label class="form-label fw-bold text-dark fs-6 mb-2">
                             <i class="fas fa-vote-yea me-2 text-success"></i>Confirmar / Actualizar Estado de Votación en Yopal *
                         </label>
@@ -496,7 +597,7 @@ if ($modoCola === 'reintento_nocontesto') {
                     </div>
 
                     <!-- CASILLAS OBLIGATORIAS PARA PUESTO DE VOTACIÓN Y NÚMERO DE MESA (Salvo No Contestó o Cédula Falsa) -->
-                    <div class="mb-4 p-3 border rounded bg-light" id="seccionPuestoMesa">
+                    <div class="mb-4 p-3 border rounded bg-light d-none" id="seccionPuestoMesa">
                         <h6 class="fw-bold text-primary mb-3">
                             <i class="fas fa-map-marked-alt me-2"></i>Lugar de Votación (Puesto y Mesa) *
                         </h6>
@@ -536,13 +637,13 @@ if ($modoCola === 'reintento_nocontesto') {
                                 <label for="puesto_votacion" class="form-label fw-bold text-dark small mb-1">
                                     <i class="fas fa-building me-1 text-secondary"></i>PUESTO: *
                                 </label>
-                                <input type="text" name="puesto_votacion" id="puesto_votacion" class="form-control" placeholder="Nombre del puesto de votación (Colegio / Escuela)..." value="<?= e($personaActual['puesto_votacion'] ?? '') ?>" required>
+                                <input type="text" name="puesto_votacion" id="puesto_votacion" class="form-control" placeholder="Nombre del puesto de votación (Colegio / Escuela)..." value="<?= e($personaActual['puesto_votacion'] ?? '') ?>">
                             </div>
                             <div class="col-md-4 col-12">
                                 <label for="mesa_votacion" class="form-label fw-bold text-dark small mb-1">
                                     <i class="fas fa-sort-numeric-up me-1 text-secondary"></i>MESA: *
                                 </label>
-                                <input type="number" name="mesa_votacion" id="mesa_votacion" class="form-control" placeholder="Número de Mesa" min="1" max="500" value="<?= e($personaActual['mesa_votacion'] ?? '') ?>" required>
+                                <input type="number" name="mesa_votacion" id="mesa_votacion" class="form-control" placeholder="Número de Mesa" min="1" max="500" value="<?= e($personaActual['mesa_votacion'] ?? '') ?>">
                             </div>
                         </div>
                     </div>
@@ -561,22 +662,6 @@ if ($modoCola === 'reintento_nocontesto') {
                     </button>
                 </form>
 
-            </div>
-        </div>
-    <?php else: ?>
-        <!-- Mensaje cuando la cola seleccionada está vacía -->
-        <div class="card card-custom shadow-sm border text-center p-5 mb-4">
-            <div class="card-body d-flex flex-column align-items-center justify-content-center">
-                <i class="fas fa-check-double fa-4x text-success mb-3"></i>
-                <?php if ($modoCola === 'reintento_nocontesto'): ?>
-                    <h3 class="fw-bold text-dark">¡No hay llamadas pendientes en la Cola de Reintento!</h3>
-                    <p class="text-muted">Todos los afiliados marcados como "No Contestó" han sido reintentados o ya dieron su respuesta en la Ronda #<?= $rondaActiva['numero_ronda'] ?>.</p>
-                    <a href="dashboard.php?modo=normal" class="btn btn-primary"><i class="fas fa-users me-1"></i> Volver a Cola Inicial</a>
-                <?php else: ?>
-                    <h3 class="fw-bold text-dark">¡Todas las Encuestas Iniciales de la Ronda #<?= $rondaActiva['numero_ronda'] ?> han sido Procesadas!</h3>
-                    <p class="text-muted">No hay más afiliados pendientes iniciales. Puedes cambiar al <strong>Modo Reintentar No Contestaron</strong> para volver a llamar a quienes no respondieron previamente.</p>
-                    <a href="dashboard.php?modo=reintento_nocontesto" class="btn btn-warning text-dark fw-bold"><i class="fas fa-redo me-1"></i> Ir a Cola de Reintento (<?= $totalReintentosPendientes ?>)</a>
-                <?php endif; ?>
             </div>
         </div>
     <?php endif; ?>
@@ -617,9 +702,9 @@ if ($modoCola === 'reintento_nocontesto') {
                 if (inputMesa) inputMesa.removeAttribute('required');
                 if (badgeExencion) badgeExencion.classList.remove('d-none');
             } else {
-                radioVotanteYopal.forEach(r => r.setAttribute('required', 'required'));
-                if (inputPuesto) inputPuesto.setAttribute('required', 'required');
-                if (inputMesa) inputMesa.setAttribute('required', 'required');
+                // radioVotanteYopal.forEach(r => r.setAttribute('required', 'required'));
+                // if (inputPuesto) inputPuesto.setAttribute('required', 'required');
+                // if (inputMesa) inputMesa.setAttribute('required', 'required');
                 if (badgeExencion) badgeExencion.classList.add('d-none');
             }
         }
@@ -657,6 +742,35 @@ if ($modoCola === 'reintento_nocontesto') {
             });
         <?php endif; ?>
     });
+
+    function simularBotonMetaWhatsApp(tok) {
+        Swal.fire({
+            title: '🤖 Prueba de Botones Meta WhatsApp API',
+            text: 'Selecciona la respuesta que el usuario tocaría dentro de su chat de WhatsApp:',
+            input: 'select',
+            inputOptions: {
+                <?php foreach ($candidatos as $c): ?>
+                    '<?= e(addslashes($c['nombre'])) ?>': '<?= e(addslashes($c['nombre'])) ?>',
+                <?php endforeach; ?>
+            },
+            showCancelButton: true,
+            confirmButtonText: '⚡ Simular Clic de Botón',
+            cancelButtonText: 'Cancelar'
+        }).then((result) => {
+            if (result.isConfirmed && result.value) {
+                fetch('../api_whatsapp_webhook.php?simular_respuesta=1&token=' + encodeURIComponent(tok) + '&candidato=' + encodeURIComponent(result.value))
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.success) {
+                            Swal.fire('¡Respuesta Capturada!', 'El Webhook de Meta recibió e ingresó la respuesta automáticamente.', 'success')
+                                .then(() => window.location.reload());
+                        } else {
+                            Swal.fire('Atención', data.message || 'No se pudo simular', 'error');
+                        }
+                    });
+            }
+        });
+    }
 </script>
 </body>
 </html>

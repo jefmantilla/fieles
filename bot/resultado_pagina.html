@@ -1,0 +1,630 @@
+<!DOCTYPE html><html lang="es"><head><meta http-equiv="origin-trial" content="A7vZI3v+Gz7JfuRolKNM4Aff6zaGuT7X0mf3wtoZTnKv6497cVMnhy03KDqX7kBz/q/iidW7srW31oQbBt4VhgoAAACUeyJvcmlnaW4iOiJodHRwczovL3d3dy5nb29nbGUuY29tOjQ0MyIsImZlYXR1cmUiOiJEaXNhYmxlVGhpcmRQYXJ0eVN0b3JhZ2VQYXJ0aXRpb25pbmczIiwiZXhwaXJ5IjoxNzU3OTgwODAwLCJpc1N1YmRvbWFpbiI6dHJ1ZSwiaXNUaGlyZFBhcnR5Ijp0cnVlfQ==">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consulta Lugar de Votación</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+  <script type="text/javascript" async="" charset="utf-8" src="https://www.gstatic.com/recaptcha/releases/ox8dsmiqR62P1bqhciWOn7Fg/recaptcha__es_419.js" crossorigin="anonymous" integrity="sha384-+n7fHD0IAsq38q1v+PUfUK9REgEXERAQgb19xajuUYGYN7yUXFemn+qzsAei+6oc"></script><script src="https://www.google.com/recaptcha/api.js" async="" defer=""></script>
+<style>
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 1200;
+    background-color: #002f56;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .headerInner {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: 10px 18px;
+    gap: 12px;
+    max-width: 1920px;
+    margin: 0 auto;
+  }
+
+  .left {
+    justify-self: start;
+    display: flex;
+    align-items: center;
+  }
+
+  .logoWrap {
+    display: inline-flex;
+    align-items: center;
+    padding: 15px 1px;
+  }
+
+  .center {
+    justify-self: center;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.1;
+    padding-inline: 8px;
+  }
+
+  .right {
+    justify-self: end;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .title {
+    margin: 0;
+    font-size: clamp(1.1rem, 2vw, 2rem);
+    font-weight: 900;
+    color: #ffffff;
+    letter-spacing: -0.3px;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+
+  .subtitle {
+    margin: 2px 0 0;
+    font-size: clamp(0.75rem, 1.2vw, 0.95rem);
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 600;
+  }
+
+  .profileContainer {
+    position: relative;
+  }
+
+  .profileButton {
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border-radius: 12px;
+    padding: 6px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(6px);
+  }
+
+  .profileBadge {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    z-index: 1199;
+  }
+
+  .dropdown {
+    position: absolute;
+    top: 52px;
+    right: 0;
+    width: 320px;
+    background-color: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 14px;
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+    padding: 12px;
+    z-index: 1200;
+  }
+
+  .dropdownHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .avatarCircle {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 176, 172, 0.12);
+    border: 1px solid rgba(0, 176, 172, 0.25);
+    font-size: 1.2rem;
+  }
+
+  .dropdownName {
+    margin: 0;
+    font-weight: 800;
+    color: #1e3a8a;
+    font-size: 0.98rem;
+    line-height: 1.15;
+  }
+
+  .dropdownDoc {
+    margin: 2px 0 0;
+    color: rgba(0, 0, 0, 0.65);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .closeBtn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 1.1rem;
+    color: rgba(0, 0, 0, 0.6);
+    padding: 4px;
+  }
+
+  .dropdownBody {
+    padding-top: 10px;
+    padding-bottom: 10px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .userInfo {
+    margin: 0;
+    font-size: 0.92rem;
+    color: #333;
+  }
+
+  .logoutButton {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: none;
+    cursor: pointer;
+    font-weight: 800;
+    background-color: #1e3a8a;
+    color: #fff;
+  }
+
+  /* ===============================
+   FOOTER BASE
+   =============================== */
+.footer-rnec {
+  background: #002d55;
+  color: #f5f7fa;
+  padding: 50px 0 0;
+  font-family: "Lato", sans-serif;
+  font-size: 15px;
+  position: relative;
+  margin: 0;
+}
+ 
+.footer-logo-img {
+  width: 160px;
+  margin-bottom: 15px;
+  display: block;
+}
+ 
+.footer-rnec p {
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+ 
+.footer-rnec i {
+  color: #00b0ac;
+}
+ 
+/* ===============================
+   ENLACES
+   =============================== */
+.footer-links {
+  margin-top: 105px;
+  padding-left: 120px;
+}
+ 
+.footer-links ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+ 
+.footer-links ul li {
+  margin-bottom: 8px;
+}
+ 
+.footer-links a {
+  color: #f5f7fa;
+  text-decoration: none;
+  transition: color 0.3s ease;
+}
+ 
+.footer-links a:hover {
+  color: #00b0ac;
+}
+ 
+/* ===============================
+   REDES SOCIALES
+   =============================== */
+.footer-social {
+  margin-top: 105px;
+}
+ 
+.footer-social .social-icons {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+}
+ 
+.footer-social .social-icon {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid #00b0ac;
+  color: #fff;
+  transition: all 0.3s ease;
+  font-size: 18px;
+  line-height: 1;
+}
+ 
+.footer-social .social-icon:hover {
+  background: #00b0ac;
+  color: #002d55;
+  transform: translateY(-3px);
+}
+ 
+/* ===============================
+   LÍNEA INFERIOR
+   =============================== */
+.footer-bottom {
+  text-align: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  margin-top: 40px;
+  padding: 15px 0 10px;
+  font-size: 14px;
+  color: #b0c7dc;
+  background: #002b50;
+}
+ 
+/* ===============================
+   RESPONSIVE DESIGN
+   =============================== */
+@media (max-width: 992px) {
+  .footer-links,
+  .footer-social {
+    margin-top: 60px;
+    padding-left: 0;
+  }
+}
+ 
+@media (max-width: 768px) {
+  .footer-container .row {
+    flex-direction: column;
+    align-items: center;
+  }
+ 
+  .footer-logo,
+  .footer-links,
+  .footer-social {
+    text-align: center;
+    margin-top: 30px;
+  }
+ 
+ 
+  .footer-logo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+ 
+  .footer-logo-img {
+    margin-top: 10px;
+    margin-bottom: 10px;
+  }
+ 
+  .footer-links {
+    padding-left: 0;
+  }
+ 
+  .footer-social .social-icons {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+ 
+  .footer-social .social-icon {
+    width: 45px;
+    height: 45px;
+    font-size: 20px;
+  }
+}
+ 
+ 
+@media (max-width: 480px) {
+  .footer-logo-img {
+    width: 130px;
+  }
+ 
+  .footer-links ul li {
+    margin-bottom: 6px;
+  }
+ 
+  .footer-bottom {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+}
+ 
+ 
+ 
+/* ===============================
+   HEADER RNEC - Solicitud Apostilla
+   =============================== */
+ 
+.header-rnec {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  background:
+    linear-gradient(rgba(0, 45, 85, 0.75), rgba(0, 45, 85, 0.75)),
+    url("../images/fachada_regis.jpg") center/cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-position: 60% 40%;
+}
+ 
+/* Capa superior */
+.header-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+ 
+/* Estructura del contenido */
+.header-content {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 1300px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 60px;
+  color: #fff;
+}
+ 
+/* LOGO */
+.header-logo {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+ 
+.header-logo img {
+  width: 230px;
+  height: auto;
+  margin-top: 42px;
+}
+ 
+/* TÍTULO */
+.header-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+}
+ 
+.header-title h1 {
+  color: #fff !important;
+  background: transparent !important;
+  border: none !important;
+  font-size: 40px;
+  font-weight: 900;
+  margin: 0;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+ 
+.header-title i {
+  color: #00b0ac;
+  font-size: 42px;
+}
+ 
+/* RESPONSIVE */
+@media (max-width: 768px) {
+  .header-rnec {
+    height: 180px;
+  }
+ 
+  .header-content {
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 20px;
+  }
+ 
+  .header-logo img {
+    width: 120px;
+    margin-bottom: 10px;
+  }
+ 
+  .header-title {
+    position: relative;
+    left: 0;
+    transform: none;
+  }
+ 
+  .header-title h1 {
+    font-size: 26px;
+  }
+}
+#guia_lectura {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: transparent;
+  z-index: 9999;
+  pointer-events: none;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+</style></head>
+
+
+<body>
+  <header class="header">
+    <div class="headerInner">
+
+      <div class="left">
+        <a href="/" class="logoWrap">
+          <img src="/images/logo-registraduria.png" alt="Logo Registraduría" style="height: 64px;">
+        </a>
+      </div>
+
+      <div class="center">
+        <h1 class="title">CONSULTA LUGAR DE VOTACIÓN</h1>
+      </div>
+
+    </div>
+  </header>
+
+  <main class="container">
+
+    <div class="layout">
+      <!-- Columna formulario -->
+      <section class="form-col">
+        <form id="consultaForm" novalidate="">
+          <label class="label" for="documento">No. Identificación:</label>
+          <input class="input-pill" type="text" id="documento" name="documento" inputmode="numeric" maxlength="15" placeholder="dígite el número sin puntos ni comas" autocomplete="off" required="">
+          <div id="docStatus" class="status ok">✓ El campo está listo para ser enviado</div>
+
+          <label class="label" for="eleccion">Seleccione la elección:</label>
+          <select class="input-pill" id="eleccion" name="eleccion" required="">
+          <option value="0">LUGAR DE VOTACION ACTUAL</option><option value="678">ELECCIÓN ATÍPICA ALCALDE CARTAGO-VALLE</option></select>
+
+          <div class="captcha-label">MARQUE EL CUADRO DE VERIFICACIÓN:</div>
+          <div class="g-recaptcha" data-sitekey="6LeLRw0tAAAAAOfUZZ34vi2KKHjukhLhQ5lfzuLM"><div style="width: 304px; height: 78px;"><div><iframe title="reCAPTCHA" width="304" height="78" role="presentation" name="a-u987dduebc7j" frameborder="0" scrolling="no" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-top-navigation allow-modals allow-popups-to-escape-sandbox allow-storage-access-by-user-activation" src="https://www.google.com/recaptcha/api2/anchor?ar=1&amp;k=6LeLRw0tAAAAAOfUZZ34vi2KKHjukhLhQ5lfzuLM&amp;co=aHR0cHM6Ly9jb25zdWx0YWNlbnNvLnJlZ2lzdHJhZHVyaWEuZ292LmNvOjQ0Mw..&amp;hl=es-419&amp;v=ox8dsmiqR62P1bqhciWOn7Fg&amp;size=normal&amp;anchor-ms=20000&amp;execute-ms=30000&amp;cb=6elkhk3b2map"></iframe></div><textarea id="g-recaptcha-response" name="g-recaptcha-response" class="g-recaptcha-response" style="width: 250px; height: 40px; border: 1px solid rgb(193, 193, 193); margin: 10px 25px; padding: 0px; resize: none; display: none;"></textarea></div><iframe style="display: none;"></iframe></div>
+
+          <button class="btn" type="submit" id="submitBtn">CONSULTAR</button>
+        </form>
+      </section>
+
+      <!-- Columna resultado -->
+      <section class="result-col">
+        <h2 class="result-title">INFORMACIÓN DEL LUGAR DE VOTACIÓN</h2>
+        <div id="resultContent" class="result-content">
+    <table class="result-table">
+      <thead>
+        <tr>
+          <th>NUIP</th>
+          <th>DEPARTAMENTO</th>
+          <th>MUNICIPIO</th>
+          <th>PUESTO</th>
+          <th>DIRECCIÓN</th>
+          <th>MESA</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1118539661</td>
+          <td>CASANARE</td>
+          <td>YOPAL</td>
+          <td>IE EL PARAISO</td>
+          <td>CRA 7 No 30-01</td>
+          <td>20</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="mensaje-ciudadano">
+      <strong>Señor Ciudadano:</strong><br><br>
+      Si tiene dudas o inquietudes acerca de su lugar de votación, contáctese con la Registraduría Nacional del Estado Civil.
+    </div>
+    <div class="mapa-section">
+      <div class="mapa-header">
+        <svg class="mapa-header-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z" fill="#0b3b6f"></path>
+        </svg>
+        <div class="mapa-header-text">
+          <span class="mapa-header-title">Ubicación del puesto de votación</span>
+          <span class="mapa-header-subtitle">IE EL PARAISO — CRA 7 No 30-01, YOPAL</span>
+        </div>
+      </div>
+      <div class="mapa-container">
+        <iframe src="https://www.google.com/maps?q=5.326042269850152,-72.4031981879889&amp;z=17&amp;output=embed" allowfullscreen="" loading="lazy" referrerpolicy="no-referrer-when-downgrade">
+        </iframe>
+      </div>
+      <div class="mapa-footer">
+        <span>Ubicación exacta del puesto</span>
+        <a href="https://www.google.com/maps/dir/?api=1&amp;destination=5.326042269850152,-72.4031981879889" target="_blank" rel="noopener">
+          Abrir en Google Maps ↗
+        </a>
+      </div>
+    </div>
+  </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+
+    <footer class="footer-rnec">
+        <div class="footer-container container">
+            <div class="row">
+ 
+                <!-- Logo y sede principal -->
+                <div class="col-md-4 footer-logo">
+                    <img src="{{ asset('images/Logo_Regis_Blanco.png') }}" alt="Registraduría Nacional del Estado Civil" class="footer-logo-img">
+                    <p><strong>Sede principal</strong></p>
+                    <p><i class="fas fa-map-marker-alt"></i> Av. Calle 26 n.º 51-50, CAN, Bogotá, Colombia. CP: 111321
+                    </p>
+                    <p><i class="fas fa-envelope"></i> Horario de atención: Lunes a viernes de 8:00 a. m. a 4:00 p. m.
+                    </p>
+                    <p><i class="fas fa-phone-alt"></i> Conmutador: +57 (601) 220 2880</p>
+                </div>
+ 
+                <!-- Enlaces institucionales -->
+                <div class="col-md-4 footer-links">
+                    <p><strong>Enlaces de interés</strong></p>
+                    <ul>
+                        <li><a href="https://www.registraduria.gov.co/Politicas-de-privacidad.html">Políticas de
+                                privacidad</a></li>
+                        <li><a href="https://www.registraduria.gov.co/Politicas-de-privacidad.html">Condiciones de
+                                uso</a></li>
+                        <li><a href="https://www.registraduria.gov.co/?page=plan">Mapa del sitio</a></li>
+                        <li><a href="https://gestordocumental.registraduria.gov.co:4450/">Contáctenos</a></li>
+                        <li><a href="https://gestordocumental.registraduria.gov.co:4450/">PQRSDC</a></li>
+                    </ul>
+                </div>
+ 
+                <!-- Redes sociales -->
+                <div class="col-md-4 footer-social">
+                    <p><strong>Síguenos</strong></p>
+                    <div class="social-icons">
+                        <a href="https://www.facebook.com/RegistraduriaNacional/" target="_blank" class="social-icon"><i class="fab fa-facebook-f"></i></a>
+                        <a href="https://twitter.com/Registraduria" target="_blank" class="social-icon">
+                            <i class="fa-brands fa-x-twitter"></i>
+                        </a>
+ 
+ 
+                        <a href="https://www.youtube.com/user/RegistraduriaNal" target="_blank" class="social-icon"><i class="fab fa-youtube"></i></a>
+                        <a href="https://www.instagram.com/registraduria/" target="_blank" class="social-icon"><i class="fab fa-instagram"></i></a>
+                        <a href="https://www.linkedin.com/company/registradur%C3%ADa-nacional-del-estado-civil/" target="_blank" class="social-icon"><i class="fab fa-linkedin-in"></i></a>
+                    </div>
+                </div>
+ 
+            </div>
+        </div>
+ 
+        <div class="footer-bottom">
+            <p>Última actualización: Noviembre de 2025</p>
+            <p>© 2025 - Registraduría Nacional del Estado Civil</p>
+        </div>
+    </footer>
+ 
+
+
+<div style="background-color: rgb(255, 255, 255); border: 1px solid rgb(204, 204, 204); box-shadow: rgba(0, 0, 0, 0.2) 2px 2px 3px; position: absolute; transition: visibility linear 0.3s, opacity 0.3s linear; opacity: 0; visibility: hidden; z-index: 2000000000; left: 0px; top: -10000px;"><div style="width: 100%; height: 100%; position: fixed; top: 0px; left: 0px; z-index: 2000000000; background-color: rgb(255, 255, 255); opacity: 0.05;"></div><div class="g-recaptcha-bubble-arrow" style="border: 11px solid transparent; width: 0px; height: 0px; position: absolute; pointer-events: none; margin-top: -11px; z-index: 2000000000;"></div><div class="g-recaptcha-bubble-arrow" style="border: 10px solid transparent; width: 0px; height: 0px; position: absolute; pointer-events: none; margin-top: -10px; z-index: 2000000000;"></div><div style="z-index: 2000000000; position: relative;"><iframe title="el desafío de recaptcha caduca dentro de dos minutos" name="c-u987dduebc7j" frameborder="0" scrolling="no" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-top-navigation allow-modals allow-popups-to-escape-sandbox allow-storage-access-by-user-activation" src="https://www.google.com/recaptcha/api2/bframe?hl=es-419&amp;v=ox8dsmiqR62P1bqhciWOn7Fg&amp;k=6LeLRw0tAAAAAOfUZZ34vi2KKHjukhLhQ5lfzuLM&amp;bft=0dAFcWeA73hWnMzkqexZD-nt1ddChiWBjwvw-Sr1YSVHjCp8tlCZzUpgW5cORT7AOtHZrgwJQ0mUkcN5BFq8t1PNecuu3s1wOHyw" style="width: 100%; height: 100%;"></iframe></div></div></body></html>

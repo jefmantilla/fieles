@@ -16,71 +16,6 @@ $obsPage = max(1, (int)($_GET['obs_page'] ?? 1));
 $obsLimit = 16;
 $obsOffset = ($obsPage - 1) * $obsLimit;
 
-// 1. Crear Nuevo Candidato con Grupo Político
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'crear_candidato') {
-    $token = $_POST['csrf_token'] ?? '';
-    if (!verifyCSRFToken($token)) {
-        $error = "Token de seguridad expirado.";
-    } else {
-        $nombreCand = sanitizeInput($_POST['nombre_candidato'] ?? '');
-        $grupoCand = sanitizeInput($_POST['grupo_candidato'] ?? '');
-
-        if (empty($nombreCand)) {
-            $error = "El nombre del candidato es obligatorio.";
-        } else {
-            $stmtIns = $pdo->prepare("INSERT INTO candidatos_encuestas (nombre, grupo, activo) VALUES (?, ?, 1)");
-            if ($stmtIns->execute([$nombreCand, $grupoCand])) {
-                $msg = "¡Candidato '" . e($nombreCand) . "' guardado exitosamente!";
-            } else {
-                $error = "Error al guardar candidato.";
-            }
-        }
-    }
-}
-
-// 2. Editar Candidato
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'editar_candidato') {
-    $token = $_POST['csrf_token'] ?? '';
-    if (!verifyCSRFToken($token)) {
-        $error = "Token de seguridad expirado.";
-    } else {
-        $candId = (int)($_POST['candidato_id'] ?? 0);
-        $nombreCand = sanitizeInput($_POST['nombre_candidato'] ?? '');
-        $grupoCand = sanitizeInput($_POST['grupo_candidato'] ?? '');
-
-        if (empty($candId) || empty($nombreCand)) {
-            $error = "El nombre del candidato es obligatorio.";
-        } else {
-            $stmtUpd = $pdo->prepare("UPDATE candidatos_encuestas SET nombre = ?, grupo = ? WHERE id = ?");
-            $stmtUpd->execute([$nombreCand, $grupoCand, $candId]);
-            $msg = "¡Candidato modificado exitosamente!";
-        }
-    }
-}
-
-// 3. Eliminar Candidato
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'eliminar_candidato') {
-    $token = $_POST['csrf_token'] ?? '';
-    if (verifyCSRFToken($token)) {
-        $candId = (int)($_POST['candidato_id'] ?? 0);
-        $stmtDel = $pdo->prepare("DELETE FROM candidatos_encuestas WHERE id = ?");
-        $stmtDel->execute([$candId]);
-        $msg = "¡Candidato eliminado correctamente!";
-    }
-}
-
-// 4. Toggle Estado Candidato
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'toggle_candidato') {
-    $token = $_POST['csrf_token'] ?? '';
-    if (verifyCSRFToken($token)) {
-        $candId = (int)($_POST['candidato_id'] ?? 0);
-        $nuevoEstado = (int)($_POST['nuevo_estado'] ?? 1);
-        $stmtUpd = $pdo->prepare("UPDATE candidatos_encuestas SET activo = ? WHERE id = ?");
-        $stmtUpd->execute([$nuevoEstado, $candId]);
-        $msg = "Estado del candidato actualizado.";
-    }
-}
-
 // Obtener Lista Completa de Rondas Creadas
 $stmtHistorialRondas = $pdo->query("SELECT * FROM rondas_encuestas ORDER BY numero_ronda DESC");
 $listaRondas = $stmtHistorialRondas->fetchAll();
@@ -114,6 +49,29 @@ $totalEncuestadoras = $stmtTotalEnc->fetchColumn();
 // Lista de Candidatos Configurados
 $stmtCandidatosList = $pdo->query("SELECT * FROM candidatos_encuestas ORDER BY id ASC");
 $listaCandidatos = $stmtCandidatosList->fetchAll();
+
+// Obtener Pregunta Principal, Guión de Llamadas y Meta Config
+$stmtConfigPreg = $pdo->query("SELECT pregunta_candidato, guion_llamada, meta_wa_phone_number_id, meta_wa_access_token, meta_wa_verify_token FROM configuracion_encuestas WHERE id = 1");
+$configRow = $stmtConfigPreg->fetch() ?: [];
+$preguntaCandidato = !empty($configRow['pregunta_candidato']) ? $configRow['pregunta_candidato'] : '¿Por cuál candidato planea votar o cuál fue el resultado de la llamada?';
+$guionLlamada = !empty($configRow['guion_llamada']) ? $configRow['guion_llamada'] : "Hola, muy buenas tardes. Mi nombre es Andrea de la firma de opinión Estelar. Nos comunicamos muy brevemente para realizarle un par de preguntas rápidas sobre el desarrollo y futuro de nuestro municipio como parte de un estudio local. ¿Nos concede solo 1 minuto de su tiempo?";
+$metaWaPhoneId = $configRow['meta_wa_phone_number_id'] ?? '';
+$metaWaAccessToken = $configRow['meta_wa_access_token'] ?? '';
+$metaWaVerifyToken = !empty($configRow['meta_wa_verify_token']) ? $configRow['meta_wa_verify_token'] : 'fieles_wa_token_123';
+
+// Lista de Preguntas Configuradas
+$stmtPreguntasList = $pdo->query("SELECT * FROM preguntas_encuestas ORDER BY id ASC");
+$listaPreguntas = $stmtPreguntasList->fetchAll();
+
+if (empty($listaPreguntas)) {
+    $pdo->exec("INSERT INTO preguntas_encuestas (pregunta, tipo, opciones, activo) VALUES 
+        ('¿Por cuál candidato o propuesta política planea votar en las próximas elecciones?', 'opcion_multiple', 'Candidato Oficial, Candidato Opositor, Voto en Blanco, Indeciso', 1),
+        ('¿Cuáles son las necesidades o temas prioritarios en su comuna o sector?', 'texto_libre', '', 1),
+        ('¿Confirmaría su apoyo y participación activa el día de la jornada electoral?', 'opcion_multiple', 'Sí Confirmado, Tal vez / En duda, No asistirá', 1)
+    ");
+    $stmtPreguntasList = $pdo->query("SELECT * FROM preguntas_encuestas ORDER BY id ASC");
+    $listaPreguntas = $stmtPreguntasList->fetchAll();
+}
 
 // Conteo Estadístico por Candidato de la RONDA SELECCIONADA o TODAS
 if ($rondaConsulta === 'todas') {
@@ -236,6 +194,16 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/mdb-ui-kit/6.4.0/mdb.min.css">
     <link rel="stylesheet" href="../assets/css/custom.css">
+    <style>
+        .card-interactive {
+            cursor: pointer;
+            transition: all 0.25s ease-in-out;
+        }
+        .card-interactive:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.15) !important;
+        }
+    </style>
 </head>
 <body class="bg-light">
 
@@ -272,10 +240,11 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
         </div>
     </div>
 
-    <!-- Tarjetas de Resumen Global -->
+    <!-- Tarjetas de Resumen Global Interactivas (Hacer clic para ver lista) -->
     <div class="row g-3 mb-4">
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-primary p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-primary p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergenteCategory('todas_encuestas', 'Total Encuestas Registradas')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Total Encuestas Registradas</h6>
@@ -289,25 +258,27 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
         </div>
 
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-warning p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-warning p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergenteCategory('base_afiliados', 'Base Afiliados a Encuestar')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
-                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Candidatos / Grupos</h6>
-                        <h3 class="fw-bold text-dark mb-0"><?= count($listaCandidatos) ?></h3>
+                        <h6 class="text-uppercase text-muted fw-bold small mb-1">Base Total Afiliados</h6>
+                        <h3 class="fw-bold text-dark mb-0"><?= $totalBaseAfiliados ?></h3>
                     </div>
                     <div class="text-warning p-3 rounded-circle" style="background-color: #fff8e1;">
-                        <i class="fas fa-vote-yea fa-lg"></i>
+                        <i class="fas fa-users fa-lg"></i>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-success p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-success p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergenteCategory('fieles_todos', 'Votantes Fieles (100% Leal)')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Análisis de Fidelidad</h6>
-                        <a href="fidelidad.php" class="btn btn-outline-success btn-sm mt-1 fw-bold"><i class="fas fa-user-check me-1"></i> Ver Matriz Fieles</a>
+                        <h3 class="fw-bold text-success mb-0">Ver Fieles</h3>
                     </div>
                     <div class="text-success p-3 rounded-circle" style="background-color: #e8f5e9;">
                         <i class="fas fa-user-shield fa-lg"></i>
@@ -317,12 +288,12 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
         </div>
 
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-info p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-info p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergenteCategory('encuestadoras', 'Equipo de Encuestadoras Registradas')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Encuestadoras Registradas</h6>
                         <h3 class="fw-bold text-dark mb-0"><?= $totalEncuestadoras ?></h3>
-                        <a href="rendimiento.php" class="btn btn-outline-info btn-sm mt-1 fw-bold"><i class="fas fa-chart-line me-1"></i> Ver Rendimiento</a>
                     </div>
                     <div class="text-info p-3 rounded-circle" style="background-color: #e0f7fa;">
                         <i class="fas fa-headset fa-lg"></i>
@@ -336,120 +307,32 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
     <div class="card card-custom mb-4 shadow-sm border">
         <div class="card-body p-3 bg-white">
             <div class="row text-center align-items-center">
-                <div class="col-md-3 border-end">
+                <div class="col-md-3 border-end py-1 card-interactive" onclick="abrirTarjetaEmergenteCategory('base_afiliados', 'Base Afiliados a Encuestar')">
                     <span class="text-muted small fw-bold text-uppercase">Base Afiliados a Encuestar</span>
                     <h4 class="fw-bold text-dark mb-0"><?= $totalBaseAfiliados ?></h4>
                 </div>
-                <div class="col-md-3 border-end">
+                <div class="col-md-3 border-end py-1 card-interactive" onclick="abrirTarjetaEmergenteCategory('todas_encuestas', 'Llamadas Realizadas')">
                     <span class="text-success small fw-bold text-uppercase"><i class="fas fa-check-circle me-1"></i>Llamadas Realizadas</span>
                     <h4 class="fw-bold text-success mb-0"><?= $totalEncuestasRonda ?></h4>
                 </div>
-                <div class="col-md-3 border-end">
+                <div class="col-md-3 border-end py-1 card-interactive" onclick="abrirTarjetaEmergenteCategory('no_contesto_equivocado', 'No Contestaron / Equivocados')">
                     <span class="text-warning small fw-bold text-uppercase"><i class="fas fa-phone-slash me-1"></i>No Contestaron / Equivocados</span>
                     <h4 class="fw-bold text-warning text-dark mb-0"><?= ($countNoContesto + $countNumEquiv) ?></h4>
                 </div>
-                <div class="col-md-3">
-                    <span class="text-danger small fw-bold text-uppercase"><i class="fas fa-user-clock me-1"></i>Pendientes por Llamar</span>
-                    <h4 class="fw-bold text-danger mb-0"><?= $countPendientesLlamar ?></h4>
+                <div class="col-md-3 py-1 card-interactive" onclick="abrirTarjetaEmergenteCategory('no_contesto', 'No Contestaron / Sin Respuesta')">
+                    <span class="text-danger small fw-bold text-uppercase"><i class="fas fa-user-clock me-1"></i>No Contestaron</span>
+                    <h4 class="fw-bold text-danger mb-0"><?= $countNoContesto ?></h4>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- SECCIÓN 1: GESTIÓN DE CANDIDATOS Y RESULTADOS CON NAVEGADOR DE RONDAS -->
+    <!-- SECCIÓN 1: RESULTADOS POR RONDA Y NAVEGADOR DE RONDAS -->
     <div class="row g-4 mb-4">
         
-        <!-- Tarjeta 1: Crear y Gestor de Candidatos + Modificar/Eliminar -->
-        <div class="col-lg-6">
-            <div class="card card-custom shadow-sm border h-100">
-                <div class="card-body p-4">
-                    <h5 class="fw-bold text-warning mb-3"><i class="fas fa-users me-2"></i>Gestión de Candidatos y Grupo Político</h5>
-                    
-                    <form action="dashboard.php" method="POST" class="row g-2 mb-4">
-                        <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                        <input type="hidden" name="accion" value="crear_candidato">
-
-                        <div class="col-md-6">
-                            <label class="form-label small fw-bold">Nombre del Candidato *</label>
-                            <input type="text" name="nombre_candidato" class="form-control" placeholder="Ej. Dr. Juan Pérez" required>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small fw-bold">Grupo / Partido Político *</label>
-                            <input type="text" name="grupo_candidato" class="form-control" placeholder="Ej. Movimiento Yopal Avanza" required>
-                        </div>
-                        <div class="col-12 mt-2 text-end">
-                            <button type="submit" class="btn btn-warning fw-bold text-dark shadow-0">
-                                <i class="fas fa-plus me-1"></i> Agregar Candidato
-                            </button>
-                        </div>
-                    </form>
-
-                    <h6 class="fw-bold text-muted small text-uppercase mb-2">Lista de Candidatos (Editar / Eliminar / Estado):</h6>
-                    <div class="table-responsive">
-                        <table class="table table-sm table-hover align-middle">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>Candidato</th>
-                                    <th>Grupo / Partido</th>
-                                    <th>Estado</th>
-                                    <th class="text-end">Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($listaCandidatos as $cand): ?>
-                                    <tr>
-                                        <td class="fw-bold"><?= e($cand['nombre']) ?></td>
-                                        <td>
-                                            <span class="badge bg-light text-dark border">
-                                                <i class="fas fa-flag text-primary me-1"></i><?= e($cand['grupo'] ?: 'Independiente') ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <?php if ($cand['activo'] == 1): ?>
-                                                <span class="badge bg-success">Activo</span>
-                                            <?php else: ?>
-                                                <span class="badge bg-secondary">Inactivo</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td class="text-end">
-                                            <div class="d-inline-flex gap-1">
-                                                <button class="btn btn-outline-warning btn-sm p-1 px-2 text-dark" onclick='abrirModalEditarCandidato(<?= json_encode($cand) ?>)' title="Modificar candidato">
-                                                    <i class="fas fa-edit"></i>
-                                                </button>
-
-                                                <form action="dashboard.php" method="POST" class="d-inline" onsubmit="return confirm('¿Está seguro de eliminar este candidato?');">
-                                                    <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                                                    <input type="hidden" name="accion" value="eliminar_candidato">
-                                                    <input type="hidden" name="candidato_id" value="<?= $cand['id'] ?>">
-                                                    <button type="submit" class="btn btn-outline-danger btn-sm p-1 px-2" title="Eliminar candidato">
-                                                        <i class="fas fa-trash"></i>
-                                                    </button>
-                                                </form>
-
-                                                <form action="dashboard.php" method="POST" class="d-inline">
-                                                    <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                                                    <input type="hidden" name="accion" value="toggle_candidato">
-                                                    <input type="hidden" name="candidato_id" value="<?= $cand['id'] ?>">
-                                                    <input type="hidden" name="nuevo_estado" value="<?= $cand['activo'] == 1 ? 0 : 1 ?>">
-                                                    <button type="submit" class="btn btn-outline-secondary btn-sm p-1 px-2">
-                                                        <?= $cand['activo'] == 1 ? 'Off' : 'On' ?>
-                                                    </button>
-                                                </form>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-
-                </div>
-            </div>
-        </div>
-
-        <!-- Tarjeta 2: NAVEGADOR DE RONDAS Y RESULTADOS ESTADÍSTICOS -->
-        <div class="col-lg-6">
-            <div class="card card-custom shadow-sm border h-100">
+        <!-- Tarjeta: NAVEGADOR DE RONDAS Y RESULTADOS ESTADÍSTICOS (FULL WIDTH) -->
+        <div class="col-12">
+            <div class="card card-custom shadow-sm border">
                 <div class="card-body p-4">
                     
                     <!-- NAVEGADOR / SELECTOR DE RONDAS -->
@@ -494,7 +377,7 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
                                         $porc = $totalEncuestasRonda > 0 ? round(($c['total'] / $totalEncuestasRonda) * 100, 1) : 0;
                                         $esNoContesto = strpos($c['candidato_elegido'], 'No Contestó') !== false || strpos($c['candidato_elegido'], 'Equivocado') !== false || strpos($c['candidato_elegido'], 'Rechazó') !== false;
                                     ?>
-                                        <tr class="<?= $esNoContesto ? 'table-warning text-dark' : '' ?>">
+                                        <tr class="<?= $esNoContesto ? 'table-warning text-dark' : '' ?>" style="cursor: pointer;" onclick="abrirTarjetaEmergenteCategory('candidato_<?= urlencode($c['candidato_elegido']) ?>', 'Afiliados que votaron por: <?= e($c['candidato_elegido']) ?>')">
                                             <td class="fw-bold">
                                                 <?php if ($esNoContesto): ?>
                                                     <i class="fas fa-phone-slash text-danger me-1"></i><?= e($c['candidato_elegido']) ?>
@@ -526,8 +409,6 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
                 </div>
             </div>
         </div>
-
-    </div>
 
     <!-- SECCIÓN 2: HISTORIAL EN TIEMPO REAL CON OBSERVACIONES Y RONDA DE LAS LLAMADAS (PAGINADO MÁX 16) -->
     <div class="card card-custom mb-4 shadow-sm border">
@@ -652,51 +533,147 @@ $urlObsPrefix = '?ronda=' . urlencode($rondaConsulta) . '&obs_page=';
 
 </div>
 
-<!-- Modal Modificar Candidato -->
-<div class="modal fade" id="modalEditarCandidato" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
+<!-- Modal Tarjeta Emergente Categoria -->
+<div class="modal fade" id="modalTarjetaEmergenteCat" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
-            <form action="dashboard.php" method="POST">
-                <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                <input type="hidden" name="accion" value="editar_candidato">
-                <input type="hidden" name="candidato_id" id="edit_cand_id">
-
-                <div class="modal-header bg-dark text-white">
-                    <h5 class="modal-title"><i class="fas fa-edit text-warning me-2"></i>Modificar Candidato</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Nombre del Candidato *</label>
-                        <input type="text" class="form-control" id="edit_cand_nombre" name="nombre_candidato" required>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Grupo / Partido Político *</label>
-                        <input type="text" class="form-control" id="edit_cand_grupo" name="grupo_candidato" required>
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold" id="tituloModalEmergenteCat"><i class="fas fa-users me-2 text-warning"></i>Lista de Afiliados</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                    <span class="badge bg-dark fs-6" id="totalModalEmergenteCat">0 Afiliados Encontrados</span>
+                    <div style="max-width: 380px;" class="w-100">
+                        <input type="text" id="filtroModalEmergenteCat" class="form-control form-control-sm" placeholder="🔍 Buscar (nombre, cédula, celular, comuna)..." onkeyup="filtrarListaModalCat()">
                     </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="submit" class="btn btn-warning"><i class="fas fa-save me-1"></i> Guardar Cambios</button>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Cédula</th>
+                                <th>Nombres y Apellidos</th>
+                                <th>Celular</th>
+                                <th>Comuna / Sector</th>
+                                <th>Puesto / Mesa</th>
+                                <th>Respuesta</th>
+                                <th>Observaciones</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody id="contenidoModalEmergenteCat">
+                            <!-- Carga dinámicamente -->
+                        </tbody>
+                    </table>
                 </div>
-            </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
         </div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    let editCandModal;
+    let modalEmergenteCatInstancia;
+    let datosModalCatActuales = [];
+
     document.addEventListener('DOMContentLoaded', function() {
-        editCandModal = new bootstrap.Modal(document.getElementById('modalEditarCandidato'));
+        modalEmergenteCatInstancia = new bootstrap.Modal(document.getElementById('modalTarjetaEmergenteCat'));
     });
 
-    function abrirModalEditarCandidato(candidato) {
-        document.getElementById('edit_cand_id').value = candidato.id;
-        document.getElementById('edit_cand_nombre').value = candidato.nombre;
-        document.getElementById('edit_cand_grupo').value = candidato.grupo || '';
-        editCandModal.show();
+    function abrirTarjetaEmergenteCategory(catKey, tituloNombre) {
+        document.getElementById('tituloModalEmergenteCat').innerHTML = '<i class="fas fa-list-alt me-2 text-warning"></i>' + tituloNombre;
+        const contenedor = document.getElementById('contenidoModalEmergenteCat');
+        const badgeTotal = document.getElementById('totalModalEmergenteCat');
+        document.getElementById('filtroModalEmergenteCat').value = '';
+        
+        contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2 text-primary fa-lg"></i>Cargando lista de afiliados...</td></tr>';
+        badgeTotal.textContent = 'Cargando...';
+        
+        modalEmergenteCatInstancia.show();
+
+        fetch('api_lista_categoria.php?categoria=' + encodeURIComponent(catKey))
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.lista && data.lista.length > 0) {
+                    datosModalCatActuales = data.lista;
+                    renderizarListaModalCat(data.lista);
+                    badgeTotal.textContent = data.lista.length + ' Afiliados Encontrados';
+                } else if (data.success) {
+                    datosModalCatActuales = [];
+                    contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">No se encontraron afiliados en esta categoría.</td></tr>';
+                    badgeTotal.textContent = '0 Afiliados';
+                } else {
+                    contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle me-2"></i>' + (data.message || 'Error al consultar la información.') + '</td></tr>';
+                    badgeTotal.textContent = 'Error';
+                }
+            })
+            .catch(err => {
+                console.error("Error AJAX:", err);
+                contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error al consultar la información.</td></tr>';
+                badgeTotal.textContent = 'Error';
+            });
+    }
+
+    function renderizarListaModalCat(lista) {
+        const contenedor = document.getElementById('contenidoModalEmergenteCat');
+        if (lista.length === 0) {
+            contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-3 text-muted">No coinciden resultados con la búsqueda.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        lista.forEach((item, index) => {
+            let badgeResp = '<span class="badge bg-primary">' + item.voto_ultimo + '</span>';
+            if (item.voto_ultimo.includes('No Contestó')) {
+                badgeResp = '<span class="badge bg-warning text-dark"><i class="fas fa-phone-slash me-1"></i>No Contestó</span>';
+            } else if (item.voto_ultimo.includes('Cédula Falsa')) {
+                badgeResp = '<span class="badge bg-dark"><i class="fas fa-user-times me-1"></i>Cédula Falsa</span>';
+            } else if (item.voto_ultimo.includes('Equivocado')) {
+                badgeResp = '<span class="badge bg-danger"><i class="fas fa-exclamation-triangle me-1"></i>Equivocado</span>';
+            } else if (item.voto_ultimo.includes('Rechazó')) {
+                badgeResp = '<span class="badge bg-secondary"><i class="fas fa-ban me-1"></i>Rechazó</span>';
+            }
+
+            html += `
+                <tr>
+                    <td class="small text-muted">${index + 1}</td>
+                    <td class="fw-bold"><span class="badge bg-light text-dark border">${item.cedula}</span></td>
+                    <td class="fw-bold text-dark">${item.nombre_completo}</td>
+                    <td>
+                        ${item.celular ? `<a href="tel:${item.celular}" class="btn btn-outline-success btn-sm py-0 px-2 fw-bold"><i class="fas fa-phone-alt me-1"></i>${item.celular}</a>` : '<span class="text-muted">Sin celular</span>'}
+                    </td>
+                    <td><span class="badge bg-light text-dark border">${item.comuna}</span></td>
+                    <td class="small text-muted">${item.puesto_votacion || 'Sin puesto'} / M: ${item.mesa_votacion || 'N/A'}</td>
+                    <td>${badgeResp}</td>
+                    <td class="small text-muted">${item.observaciones || 'Sin observaciones'}</td>
+                    <td class="small text-muted">${item.ultima_fecha}</td>
+                </tr>
+            `;
+        });
+        contenedor.innerHTML = html;
+    }
+
+    function filtrarListaModalCat() {
+        const term = document.getElementById('filtroModalEmergenteCat').value.toLowerCase().trim();
+        if (!term) {
+            renderizarListaModalCat(datosModalCatActuales);
+            return;
+        }
+        const filtrados = datosModalCatActuales.filter(item => 
+            item.nombre_completo.toLowerCase().includes(term) ||
+            item.cedula.toLowerCase().includes(term) ||
+            (item.celular && item.celular.toLowerCase().includes(term)) ||
+            (item.comuna && item.comuna.toLowerCase().includes(term)) ||
+            (item.voto_ultimo && item.voto_ultimo.toLowerCase().includes(term)) ||
+            (item.observaciones && item.observaciones.toLowerCase().includes(term))
+        );
+        renderizarListaModalCat(filtrados);
     }
 </script>
 </body>

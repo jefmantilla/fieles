@@ -18,6 +18,15 @@ $stmtTotalEnc = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE role_id = 4");
 $totalEncuestadoras = $stmtTotalEnc->fetchColumn();
 $totalPaginas = max(1, ceil($totalEncuestadoras / $registrosPorPagina));
 
+if ($paginaActual > $totalPaginas) {
+    $paginaActual = $totalPaginas;
+    $offset = ($paginaActual - 1) * $registrosPorPagina;
+}
+
+$rangoVista = 2;
+$inicioPag = max(1, $paginaActual - $rangoVista);
+$finPag = min($totalPaginas, $paginaActual + $rangoVista);
+
 // Obtener Lista Completa de Rondas Creadas
 $stmtHistorialRondas = $pdo->query("SELECT * FROM rondas_encuestas ORDER BY numero_ronda DESC");
 $listaRondas = $stmtHistorialRondas->fetchAll();
@@ -230,17 +239,33 @@ $urlPagePrefix = '?ronda=' . urlencode($rondaConsulta) . '&page=';
             <!-- Navegación de Paginación (Máx 16) -->
             <?php if ($totalPaginas > 1): ?>
                 <nav aria-label="Navegación de rendimiento" class="mt-4">
-                    <ul class="pagination justify-content-center">
+                    <ul class="pagination justify-content-center flex-wrap">
                         <li class="page-item <?= ($paginaActual <= 1) ? 'disabled' : '' ?>">
                             <a class="page-link" href="<?= $urlPagePrefix . ($paginaActual - 1) ?>">
                                 <i class="fas fa-chevron-left me-1"></i> Anterior
                             </a>
                         </li>
-                        <?php for ($p = 1; $p <= $totalPaginas; $p++): ?>
+
+                        <?php if ($inicioPag > 1): ?>
+                            <li class="page-item"><a class="page-link" href="<?= $urlPagePrefix ?>1">1</a></li>
+                            <?php if ($inicioPag > 2): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                        <?php endif; ?>
+
+                        <?php for ($p = $inicioPag; $p <= $finPag; $p++): ?>
                             <li class="page-item <?= ($p === $paginaActual) ? 'active' : '' ?>">
                                 <a class="page-link" href="<?= $urlPagePrefix . $p ?>"><?= $p ?></a>
                             </li>
                         <?php endfor; ?>
+
+                        <?php if ($finPag < $totalPaginas): ?>
+                            <?php if ($finPag < $totalPaginas - 1): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                            <li class="page-item"><a class="page-link" href="<?= $urlPagePrefix . $totalPaginas ?>"><?= $totalPaginas ?></a></li>
+                        <?php endif; ?>
+
                         <li class="page-item <?= ($paginaActual >= $totalPaginas) ? 'disabled' : '' ?>">
                             <a class="page-link" href="<?= $urlPagePrefix . ($paginaActual + 1) ?>">
                                 Siguiente <i class="fas fa-chevron-right ms-1"></i>

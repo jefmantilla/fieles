@@ -74,17 +74,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else if ($autorizacion !== 1) {
             $error = "Debe autorizar el tratamiento de datos personales para continuar.";
         } else {
-            // Verificar UNICIDAD en Base de Datos (Cédula, Correo, Celular)
-            $stmtCheck = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE cedula = ? OR correo = ? OR celular = ?");
-            $stmtCheck->execute([$cedula, $correo, $celular]);
-            if ($stmtCheck->fetchColumn() > 0) {
-                $error = "Ya existe un registro en el sistema con esa Cédula, Correo o Celular. Cada persona solo se puede registrar 1 vez.";
+            // 1. Verificar si la Cédula ya está registrada (en referidos o en usuarios)
+            $stmtCheckCedulaRef = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE cedula = ?");
+            $stmtCheckCedulaRef->execute([$cedula]);
+
+            $stmtCheckCedulaUser = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE cedula = ?");
+            $stmtCheckCedulaUser->execute([$cedula]);
+
+            if ($stmtCheckCedulaRef->fetchColumn() > 0 || $stmtCheckCedulaUser->fetchColumn() > 0) {
+                $error = "La cédula ingresada ya se encuentra registrada en el sistema y figura como referida a otra persona.";
             } else {
-                // Verificar cédula también contra usuarios registrados
-                $stmtCheckUser = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE cedula = ?");
-                $stmtCheckUser->execute([$cedula]);
-                if ($stmtCheckUser->fetchColumn() > 0) {
-                    $error = "La cédula ingresada ya pertenece a un líder registrado en el sistema.";
+                // 2. Verificar si el Celular ya está registrado
+                $stmtCheckCelular = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE celular = ? AND celular != ''");
+                $stmtCheckCelular->execute([$celular]);
+
+                if ($stmtCheckCelular->fetchColumn() > 0) {
+                    $error = "El número de celular ingresado ya se encuentra registrado y asignado a otra persona en nuestro sistema.";
                 } else {
                     // Generar nuevo código único para el registrado
                     $nuevoCodigo = generateUniqueCode('REF');

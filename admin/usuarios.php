@@ -11,8 +11,8 @@ $csrfToken = generateCSRFToken();
 $error = '';
 $msg = '';
 
-// 1. Procesar Creación Directa de Líder
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'crear_lider') {
+// 1. Procesar Creación Directa de Usuario
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'crear_usuario') {
     $token = $_POST['csrf_token'] ?? '';
     if (!verifyCSRFToken($token)) {
         $error = "Token de seguridad no válido.";
@@ -22,8 +22,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
         $telefono = sanitizeInput($_POST['telefono'] ?? '');
         $username = sanitizeInput($_POST['username'] ?? '');
         $password = $_POST['password'] ?? '';
+        $role_id = (int)($_POST['role_id'] ?? 2);
 
-        if (empty($nombre) || empty($cedula) || empty($telefono) || empty($username) || empty($password)) {
+        if (empty($nombre) || empty($cedula) || empty($username) || empty($password) || empty($role_id)) {
             $error = "Todos los campos son obligatorios.";
         } else {
             // Verificar unicidad de username y cedula
@@ -35,9 +36,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
                 $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
                 $codigoRef = generateUniqueCode('LID');
 
-                $stmtIns = $pdo->prepare("INSERT INTO usuarios (nombre_completo, cedula, telefono, username, password, role_id, codigo_referido) VALUES (?, ?, ?, ?, ?, 2, ?)");
-                if ($stmtIns->execute([$nombre, $cedula, $telefono, $username, $hash, $codigoRef])) {
-                    $msg = "¡Líder creado exitosamente! Código de referido: " . $codigoRef;
+                $stmtIns = $pdo->prepare("INSERT INTO usuarios (nombre_completo, cedula, telefono, username, password, role_id, codigo_referido) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                if ($stmtIns->execute([$nombre, $cedula, $telefono, $username, $hash, $role_id, $codigoRef])) {
+                    $msg = "¡Usuario creado exitosamente!";
                 } else {
                     $error = "Ocurrió un error al registrar el nuevo líder.";
                 }
@@ -46,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
     }
 }
 
-// 2. Procesar Conversión / Promoción de Referido a Líder
+// 2. Procesar Conversión / Promoción de Referido a Usuario
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'promover_referido') {
     $token = $_POST['csrf_token'] ?? '';
     if (!verifyCSRFToken($token)) {
@@ -66,7 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
             if (!$ref) {
                 $error = "El referido seleccionado no existe.";
             } else if ($ref['usuario_id'] !== null) {
-                $error = "Este referido ya ha sido promovido a Líder anteriormente.";
+                $error = "Este referido ya ha sido promovido a Usuario anteriormente.";
             } else {
                 $stmtCheckUser = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE username = ? OR cedula = ?");
                 $stmtCheckUser->execute([$username, $ref['cedula']]);
@@ -87,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
                         $stmtUpdRef->execute([$newUserId, $referidoId]);
 
                         $pdo->commit();
-                        $msg = "¡El referido " . e($nombreCompleto) . " ha sido convertido en Líder exitosamente!";
+                        $msg = "¡El referido " . e($nombreCompleto) . " ha sido convertido en Usuario exitosamente!";
                     } catch (Exception $e) {
                         $pdo->rollBack();
                         $error = "Error al promover referido a líder: " . $e->getMessage();
@@ -98,54 +99,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['
     }
 }
 
-// 3. Procesar Edición Completa de Datos y Credenciales de Líder
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'editar_lider') {
+// 3. Procesar Edición Completa de Datos y Credenciales de Usuario
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'editar_usuario') {
     $token = $_POST['csrf_token'] ?? '';
     if (!verifyCSRFToken($token)) {
         $error = "Token de seguridad no válido.";
     } else {
-        $liderId = (int)($_POST['lider_id'] ?? 0);
+        $usuarioId = (int)($_POST['usuario_id'] ?? 0);
         $nombre = sanitizeInput($_POST['nombre_completo'] ?? '');
+        $role_id = (int)($_POST['role_id'] ?? 2);
         $cedula = sanitizeInput($_POST['cedula'] ?? '');
         $telefono = sanitizeInput($_POST['telefono'] ?? '');
         $username = sanitizeInput($_POST['username'] ?? '');
         $nuevaPassword = $_POST['nueva_password'] ?? '';
 
-        if (empty($liderId) || empty($nombre) || empty($cedula) || empty($telefono) || empty($username)) {
+        if (empty($usuarioId) || empty($nombre) || empty($cedula) || empty($telefono) || empty($username)) {
             $error = "Nombre, cédula, teléfono y usuario son campos obligatorios.";
         } else {
             // Verificar unicidad de username y cedula para otros usuarios
             $stmtCheck = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE (username = ? OR cedula = ?) AND id != ?");
-            $stmtCheck->execute([$username, $cedula, $liderId]);
+            $stmtCheck->execute([$username, $cedula, $usuarioId]);
             if ($stmtCheck->fetchColumn() > 0) {
                 $error = "El Usuario o Cédula ingresado ya pertenece a otra persona en el sistema.";
             } else {
                 if (!empty($nuevaPassword)) {
                     $hash = password_hash($nuevaPassword, PASSWORD_BCRYPT, ['cost' => 12]);
-                    $stmtUpd = $pdo->prepare("UPDATE usuarios SET nombre_completo = ?, cedula = ?, telefono = ?, username = ?, password = ? WHERE id = ? AND role_id = 2");
-                    $stmtUpd->execute([$nombre, $cedula, $telefono, $username, $hash, $liderId]);
+                    $stmtUpd = $pdo->prepare("UPDATE usuarios SET nombre_completo = ?, cedula = ?, telefono = ?, username = ?, password = ?, role_id = ? WHERE id = ?");
+                    $stmtUpd->execute([$nombre, $cedula, $telefono, $username, $hash, $role_id, $usuarioId]);
                 } else {
-                    $stmtUpd = $pdo->prepare("UPDATE usuarios SET nombre_completo = ?, cedula = ?, telefono = ?, username = ? WHERE id = ? AND role_id = 2");
-                    $stmtUpd->execute([$nombre, $cedula, $telefono, $username, $liderId]);
+                    $stmtUpd = $pdo->prepare("UPDATE usuarios SET nombre_completo = ?, cedula = ?, telefono = ?, username = ?, role_id = ? WHERE id = ?");
+                    $stmtUpd->execute([$nombre, $cedula, $telefono, $username, $role_id, $usuarioId]);
                 }
 
                 // Sincronizar en referidos si el líder provino de una promoción
                 $stmtUpdRef = $pdo->prepare("UPDATE referidos SET nombres = ?, apellidos = '', celular = ? WHERE usuario_id = ?");
-                $stmtUpdRef->execute([$nombre, $telefono, $liderId]);
+                $stmtUpdRef->execute([$nombre, $telefono, $usuarioId]);
 
-                $msg = "¡Datos y credenciales del líder actualizados correctamente!";
+                $msg = "¡Datos del usuario actualizados correctamente!";
             }
         }
     }
 }
 
-// Configuración de Filtro y Paginación para la Tabla de Líderes
-$buscarLider = sanitizeInput($_GET['buscar_lider'] ?? '');
+// 4. Eliminar Usuario (Solo Admin)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'eliminar_usuario') {
+    $token = $_POST['csrf_token'] ?? '';
+    if (!verifyCSRFToken($token)) {
+        $error = "Token de seguridad no válido.";
+    } else {
+        $delUserId = (int)($_POST['usuario_id'] ?? 0);
+        if ($delUserId == $admin['id']) {
+            $error = "No puedes eliminarte a ti mismo.";
+        } else {
+            $pdo->prepare("DELETE FROM usuarios WHERE id = ?")->execute([$delUserId]);
+            $msg = "Usuario eliminado exitosamente.";
+        }
+    }
+}
+
+// Configuración de Filtro y Paginación para la Tabla de Usuarios
+$buscarLider = sanitizeInput($_GET['buscar_usuario'] ?? '');
 $paginaActual = max(1, (int)($_GET['page'] ?? 1));
 $registrosPorPagina = 10;
 $offset = ($paginaActual - 1) * $registrosPorPagina;
 
-$whereClauses = ["u.role_id = 2"];
+$whereClauses = ["1=1"];
 $params = [];
 
 if (!empty($buscarLider)) {
@@ -171,21 +189,22 @@ $rangoVista = 2;
 $inicioPag = max(1, $paginaActual - $rangoVista);
 $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
-// Obtener Lista Paginada de Líderes con Desglose de Votantes por Color (Verde, Naranja, Gris)
+// Obtener Lista Paginada de Usuarioes con Desglose de Votantes por Color (Verde, Naranja, Gris)
 $sqlLideres = "
-    SELECT u.*, 
+    SELECT u.*, r.nombre as role_name, 
            (SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = u.id) as total_red,
            (SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = u.id AND votante_yopal = 'Si') as total_si,
            (SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = u.id AND votante_yopal = 'Quiero inscribir') as total_inscribir,
            (SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = u.id AND votante_yopal = 'No') as total_no
     FROM usuarios u 
+    JOIN roles r ON u.role_id = r.id
     " . $whereSql . "
     ORDER BY u.creado_en DESC
     LIMIT " . $registrosPorPagina . " OFFSET " . $offset;
 
 $stmtLideres = $pdo->prepare($sqlLideres);
 $stmtLideres->execute($params);
-$lideres = $stmtLideres->fetchAll();
+$usuarioes = $stmtLideres->fetchAll();
 
 // Obtener Lista de Referidos Elegibles para Promoción
 $stmtElegibles = $pdo->query("
@@ -208,7 +227,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestión de Líderes - Administrador</title>
+    <title>Gestión de Usuarioes - Administrador</title>
     <!-- Font Awesome & MDB / Bootstrap 5 CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/mdb-ui-kit/6.4.0/mdb.min.css">
@@ -232,10 +251,10 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                     <a class="nav-link text-white-50 fw-bold" href="dashboard.php"><i class="fas fa-chart-pie me-1"></i> Dashboard General</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link active fw-bold" href="lideres.php"><i class="fas fa-users-cog me-1 text-warning"></i> Gestionar Líderes</a>
+                    <a class="nav-link text-white-50 fw-bold" href="lideres.php"><i class="fas fa-users-cog me-1 text-warning"></i> Gestionar Líderes</a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link text-white-50 fw-bold" href="usuarios.php"><i class="fas fa-user-shield me-1 text-danger"></i> Gestionar Usuarios</a>
+                    <a class="nav-link active fw-bold" href="usuarios.php"><i class="fas fa-user-shield me-1 text-danger"></i> Gestionar Usuarios</a>
                 </li>
             </ul>
             <div class="d-flex align-items-center">
@@ -263,14 +282,14 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
     <?php endif; ?>
 
     <div class="row g-4 mb-4">
-        <!-- Formulario 1: Crear Líder Nuevo -->
+        <!-- Formulario 1: Crear Usuario Nuevo -->
         <div class="col-lg-6">
             <div class="card card-custom h-100 shadow-sm border">
                 <div class="card-body p-4">
-                    <h5 class="fw-bold text-primary mb-3"><i class="fas fa-user-plus me-2"></i>Crear Nuevo Líder</h5>
-                    <form action="lideres.php" method="POST">
+                    <h5 class="fw-bold text-primary mb-3"><i class="fas fa-user-plus me-2"></i>Crear Nuevo Usuario</h5>
+                    <form action="usuarioes.php" method="POST">
                         <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                        <input type="hidden" name="accion" value="crear_lider">
+                        <input type="hidden" name="accion" value="crear_usuario">
 
                         <div class="mb-3">
                             <label class="form-label small fw-bold">Nombre Completo *</label>
@@ -300,21 +319,21 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                         </div>
 
                         <button type="submit" class="btn btn-primary btn-block btn-primary-custom">
-                            <i class="fas fa-save me-1"></i> Registrar y Crear Líder
+                            <i class="fas fa-save me-1"></i> Registrar y Crear Usuario
                         </button>
                     </form>
                 </div>
             </div>
         </div>
 
-        <!-- Formulario 2: Promover Usuario de la Red a Líder -->
+        <!-- Formulario 2: Promover Usuario de la Red a Usuario -->
         <div class="col-lg-6">
             <div class="card card-custom h-100 border-warning shadow-sm">
                 <div class="card-body p-4">
-                    <h5 class="fw-bold text-warning mb-2"><i class="fas fa-user-shield me-2"></i>Convertir Referido en Líder (Solicitud Verbal)</h5>
+                    <h5 class="fw-bold text-warning mb-2"><i class="fas fa-user-shield me-2"></i>Convertir Referido en Usuario (Solicitud Verbal)</h5>
                     <p class="small text-muted mb-3">Asigne usuario y contraseña a una persona de la red para habilitarle su propio código QR:</p>
                     
-                    <form action="lideres.php" method="POST">
+                    <form action="usuarioes.php" method="POST">
                         <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
                         <input type="hidden" name="accion" value="promover_referido">
 
@@ -336,7 +355,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                         <!-- Caja de Confirmación Visual Destacada -->
                         <div id="cajaPersonaSeleccionada" class="alert alert-success border-success d-none mb-3 shadow-sm py-2">
                             <div class="fw-bold text-success small text-uppercase">
-                                <i class="fas fa-check-circle me-1"></i> Persona Seleccionada para ser Líder:
+                                <i class="fas fa-check-circle me-1"></i> Persona Seleccionada para ser Usuario:
                             </div>
                             <div id="nombrePersonaSeleccionada" class="fs-6 fw-bold text-dark mt-1"></div>
                         </div>
@@ -344,7 +363,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label small fw-bold">2. Asignar Usuario *</label>
-                                <input type="text" name="username" class="form-control" required placeholder="Ej. nuevo_lider">
+                                <input type="text" name="username" class="form-control" required placeholder="Ej. nuevo_usuario">
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label class="form-label small fw-bold">3. Asignar Contraseña *</label>
@@ -353,7 +372,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                         </div>
 
                         <button type="submit" class="btn btn-warning btn-block fw-bold text-dark shadow-0">
-                            <i class="fas fa-star me-1"></i> Convertir en Líder y Asignar Credenciales
+                            <i class="fas fa-star me-1"></i> Convertir en Usuario y Asignar Credenciales
                         </button>
                     </form>
                 </div>
@@ -361,22 +380,22 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
         </div>
     </div>
 
-    <!-- Tabla de Líderes Registrados -->
+    <!-- Tabla de Usuarioes Registrados -->
     <div class="card card-custom shadow-sm border">
         <div class="card-body p-4">
             
             <div class="row align-items-center mb-3">
                 <div class="col-md-6">
-                    <h5 class="fw-bold text-primary mb-0"><i class="fas fa-users-cog me-2"></i>Líderes Activos en el Sistema</h5>
-                    <span class="badge bg-dark mt-1">Mostrando <?= count($lideres) ?> de <?= $totalLideres ?> Líderes</span>
+                    <h5 class="fw-bold text-primary mb-0"><i class="fas fa-users-cog me-2"></i>Usuarioes Activos en el Sistema</h5>
+                    <span class="badge bg-dark mt-1">Mostrando <?= count($usuarioes) ?> de <?= $totalLideres ?> Usuarioes</span>
                 </div>
-                <!-- Buscador para la Tabla de Líderes -->
+                <!-- Buscador para la Tabla de Usuarioes -->
                 <div class="col-md-6 mt-2 mt-md-0">
-                    <form action="lideres.php" method="GET" class="d-flex gap-2">
-                        <input type="text" name="buscar_lider" class="form-control" placeholder="Buscar por nombre, cédula, usuario o QR..." value="<?= e($buscarLider) ?>">
+                    <form action="usuarioes.php" method="GET" class="d-flex gap-2">
+                        <input type="text" name="buscar_usuario" class="form-control" placeholder="Buscar por nombre, cédula, usuario o QR..." value="<?= e($buscarLider) ?>">
                         <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i></button>
                         <?php if (!empty($buscarLider)): ?>
-                            <a href="lideres.php" class="btn btn-secondary btn-sm"><i class="fas fa-undo"></i></a>
+                            <a href="usuarioes.php" class="btn btn-secondary btn-sm"><i class="fas fa-undo"></i></a>
                         <?php endif; ?>
                     </form>
                 </div>
@@ -390,6 +409,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                             <th>Cédula</th>
                             <th>Usuario</th>
                             <th>Teléfono</th>
+                                        <th>Rol</th>
                             <th>Código QR</th>
                             <th>Total Red (Desglose Verde/Naranja/Gris)</th>
                             <th>Fecha Creación</th>
@@ -397,12 +417,12 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if (empty($lideres)): ?>
+                        <?php if (empty($usuarioes)): ?>
                             <tr>
                                 <td colspan="8" class="text-center py-4 text-muted">No se encontraron líderes que coincidan con la búsqueda.</td>
                             </tr>
                         <?php else: ?>
-                            <?php foreach ($lideres as $lid): ?>
+                            <?php foreach ($usuarioes as $lid): ?>
                                 <tr>
                                     <td class="fw-bold"><?= e($lid['nombre_completo']) ?></td>
                                     <td><?= e($lid['cedula']) ?></td>
@@ -413,7 +433,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                                     <!-- Total Red con Mini-cuadritos de Desglose Verde, Naranja y Gris -->
                                     <td>
                                         <div class="d-flex align-items-center gap-1 flex-wrap">
-                                            <a href="dashboard.php?lider_id=<?= $lid['id'] ?>" class="btn btn-outline-primary btn-sm fw-bold shadow-0 py-1 px-2" title="Filtrar dashboard por este líder">
+                                            <a href="dashboard.php?usuario_id=<?= $lid['id'] ?>" class="btn btn-outline-primary btn-sm fw-bold shadow-0 py-1 px-2" title="Filtrar dashboard por este líder">
                                                 <i class="fas fa-sitemap me-1"></i> <?= $lid['total_red'] ?> pers.
                                             </a>
                                             <div class="d-inline-flex gap-1 ms-1">
@@ -439,7 +459,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                                     <td class="small text-muted"><?= date('d/m/Y', strtotime($lid['creado_en'])) ?></td>
                                     <td class="text-center">
                                         <button class="btn btn-outline-warning btn-sm text-dark fw-bold shadow-0" onclick='abrirModalEditarCredenciales(<?= json_encode($lid) ?>)' title="Modificar datos, usuario o contraseña del líder">
-                                            <i class="fas fa-edit me-1 text-primary"></i> Editar Líder
+                                            <i class="fas fa-edit me-1 text-primary"></i> Editar Usuario
                                         </button>
                                     </td>
                                 </tr>
@@ -449,7 +469,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                 </table>
             </div>
 
-            <!-- Navegación de Paginación para Líderes -->
+            <!-- Navegación de Paginación para Usuarioes -->
             <?php if ($totalPaginas > 1): ?>
                 <nav aria-label="Navegación de líderes" class="mt-4">
                     <ul class="pagination justify-content-center flex-wrap">
@@ -493,17 +513,17 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
 </div>
 
-<!-- Modal Editar Datos y Credenciales de Líder -->
+<!-- Modal Editar Datos y Credenciales de Usuario -->
 <div class="modal fade" id="modalEditarCredencialesLider" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form action="lideres.php" method="POST">
+            <form action="usuarioes.php" method="POST">
                 <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
-                <input type="hidden" name="accion" value="editar_lider">
-                <input type="hidden" name="lider_id" id="edit_lider_id">
+                <input type="hidden" name="accion" value="editar_usuario">
+                <input type="hidden" name="usuario_id" id="edit_usuario_id">
 
                 <div class="modal-header bg-dark text-white">
-                    <h5 class="modal-title"><i class="fas fa-user-edit text-warning me-2"></i>Editar Datos y Credenciales de Líder</h5>
+                    <h5 class="modal-title"><i class="fas fa-user-edit text-warning me-2"></i>Editar Datos y Credenciales de Usuario</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
@@ -513,23 +533,23 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                     <div class="mb-3">
                         <label class="form-label fw-bold">Nombre Completo *</label>
-                        <input type="text" class="form-control" id="edit_lider_nombre" name="nombre_completo" required placeholder="Nombre completo del líder">
+                        <input type="text" class="form-control" id="edit_usuario_nombre" name="nombre_completo" required placeholder="Nombre completo del líder">
                     </div>
 
                     <div class="row">
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold">Cédula *</label>
-                            <input type="text" class="form-control" id="edit_lider_cedula" name="cedula" required inputmode="numeric" maxlength="12" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
+                            <input type="text" class="form-control" id="edit_usuario_cedula" name="cedula" required inputmode="numeric" maxlength="12" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label fw-bold">Teléfono / Celular *</label>
-                            <input type="text" class="form-control" id="edit_lider_telefono" name="telefono" required inputmode="numeric" maxlength="10" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
+                            <input type="text" class="form-control" id="edit_usuario_telefono" name="telefono" required inputmode="numeric" maxlength="10" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
                         </div>
                     </div>
 
                     <div class="mb-3">
                         <label class="form-label fw-bold text-primary"><i class="fas fa-user me-1"></i>Usuario de Ingreso *</label>
-                        <input type="text" class="form-control" id="edit_lider_username" name="username" required>
+                        <input type="text" class="form-control" id="edit_usuario_username" name="username" required>
                     </div>
 
                     <div class="mb-3">
@@ -579,12 +599,12 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
         editLiderModal = new bootstrap.Modal(document.getElementById('modalEditarCredencialesLider'));
     });
 
-    function abrirModalEditarCredenciales(lider) {
-        document.getElementById('edit_lider_id').value = lider.id;
-        document.getElementById('edit_lider_nombre').value = lider.nombre_completo;
-        document.getElementById('edit_lider_cedula').value = lider.cedula;
-        document.getElementById('edit_lider_telefono').value = lider.telefono;
-        document.getElementById('edit_lider_username').value = lider.username;
+    function abrirModalEditarCredenciales(usuario) {
+        document.getElementById('edit_usuario_id').value = usuario.id;
+        document.getElementById('edit_usuario_nombre').value = usuario.nombre_completo;
+        document.getElementById('edit_usuario_cedula').value = usuario.cedula;
+        document.getElementById('edit_usuario_telefono').value = usuario.telefono;
+        document.getElementById('edit_usuario_username').value = usuario.username;
         editLiderModal.show();
     }
 </script>

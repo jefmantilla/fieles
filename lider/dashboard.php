@@ -28,39 +28,46 @@ $referralUrl = $protocol . "://" . $host . ($baseDir ? $baseDir : '') . "/regist
 
 // Estadísticas Desglosadas del Líder
 // 1. Directos
-$stmtDirectos = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'usuario' AND referido_por_id = ?");
+$stmtDirectos = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND (referido_por_tipo = 'usuario' OR referido_por_tipo IS NULL OR referido_por_tipo = '' OR referido_por_tipo = 'Lider')");
 $stmtDirectos->execute([$user['id']]);
 $totalDirectos = $stmtDirectos->fetchColumn();
 
 // 2. Red Indirecta (Multinivel)
-$stmtIndirectos = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND lider_raiz_id = ?");
+$stmtIndirectos = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND referido_por_tipo = 'referido'");
 $stmtIndirectos->execute([$user['id']]);
 $totalIndirectos = $stmtIndirectos->fetchColumn();
 
-// 3. Votan en Yopal
+// 3. Total Registrados en Red General
+$stmtTotalRed = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ?");
+$stmtTotalRed->execute([$user['id']]);
+$totalRedGeneral = $stmtTotalRed->fetchColumn();
+
+// 4. Votan en Yopal
 $stmtSi = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND votante_yopal = 'Si'");
 $stmtSi->execute([$user['id']]);
 $totalSi = $stmtSi->fetchColumn();
 
-// 4. Quieren Inscribir Cédula
+// 5. Quieren Inscribir Cédula
 $stmtInscribir = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND votante_yopal = 'Quiero inscribir'");
 $stmtInscribir->execute([$user['id']]);
 $totalInscribir = $stmtInscribir->fetchColumn();
 
-// 5. No Votantes / Otro municipio
-$stmtNo = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND votante_yopal = 'No'");
+// 6. No Votantes / Otro municipio / Sin consultar
+$stmtNo = $pdo->prepare("SELECT COUNT(*) FROM referidos WHERE lider_raiz_id = ? AND (votante_yopal = 'No' OR votante_yopal = 'Sin consultar' OR votante_yopal IS NULL)");
 $stmtNo->execute([$user['id']]);
 $totalNo = $stmtNo->fetchColumn();
-
-$totalRedGeneral = $totalDirectos + $totalIndirectos;
 
 // Cláusula WHERE dinámica para la red del líder
 $whereClauses = ["r.lider_raiz_id = ?"];
 $params = [$user['id']];
 
 if (!empty($votanteFiltro)) {
-    $whereClauses[] = "r.votante_yopal = ?";
-    $params[] = $votanteFiltro;
+    if ($votanteFiltro === 'No') {
+        $whereClauses[] = "(r.votante_yopal = 'No' OR r.votante_yopal = 'Sin consultar' OR r.votante_yopal IS NULL)";
+    } else {
+        $whereClauses[] = "r.votante_yopal = ?";
+        $params[] = $votanteFiltro;
+    }
 }
 
 if (!empty($comunaFiltro)) {
@@ -110,13 +117,24 @@ $stmtRedCount->execute($params);
 $totalRedFiltrada = $stmtRedCount->fetchColumn();
 $totalPaginas = max(1, ceil($totalRedFiltrada / $registrosPorPagina));
 
+// Garantizar que la página actual no sobrepase el total de páginas
+if ($paginaActual > $totalPaginas) {
+    $paginaActual = $totalPaginas;
+    $offset = ($paginaActual - 1) * $registrosPorPagina;
+}
+
+// Rango inteligente de paginación
+$rangoVista = 2;
+$inicioPag = max(1, $paginaActual - $rangoVista);
+$finPag = min($totalPaginas, $paginaActual + $rangoVista);
+
 // Obtener listado de miembros con desglose de referidos traídos (Verde, Naranja, Gris)
 $sql = "
     SELECT r.*, 
            (SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND referido_por_id = r.id) as sub_referidos_count,
            (SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND referido_por_id = r.id AND votante_yopal = 'Si') as sub_si_count,
            (SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND referido_por_id = r.id AND votante_yopal = 'Quiero inscribir') as sub_inscribir_count,
-           (SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND referido_por_id = r.id AND votante_yopal = 'No') as sub_no_count,
+           (SELECT COUNT(*) FROM referidos WHERE referido_por_tipo = 'referido' AND referido_por_id = r.id AND (votante_yopal = 'No' OR votante_yopal = 'Sin consultar' OR votante_yopal IS NULL)) as sub_no_count,
            CASE 
              WHEN r.referido_por_tipo = 'usuario' THEN u.nombre_completo 
              ELSE CONCAT(p.nombres, ' ', p.apellidos) 
@@ -148,6 +166,16 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/mdb-ui-kit/6.4.0/mdb.min.css">
     <link rel="stylesheet" href="../assets/css/custom.css">
+    <style>
+        .card-interactive {
+            cursor: pointer;
+            transition: all 0.25s ease-in-out;
+        }
+        .card-interactive:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.15) !important;
+        }
+    </style>
 </head>
 <body class="bg-light">
 
@@ -191,7 +219,7 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
         </div>
     <?php endif; ?>
 
-    <!-- Fila de QR y Tarjetas de Estadísticas Sutiles -->
+    <!-- Fila de QR y Tarjetas de Estadísticas Interactiva -->
     <div class="row g-3 mb-4">
         
         <!-- Columna QR -->
@@ -208,13 +236,14 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
             </div>
         </div>
 
-        <!-- Columna 6 Tarjetas Sutiles -->
+        <!-- Columna 6 Tarjetas Interactivas (Hacer clic para ver Tarjeta Emergente Modal) -->
         <div class="col-xl-9 col-lg-8">
             <div class="row g-3">
                 
                 <!-- Card 1: Total Registrados en Red -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-primary p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-primary p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('total', 'Total Registrados en Red')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">Total Registrados en Red</h6>
@@ -229,7 +258,8 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                 <!-- Card 2: Directos Míos -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-info p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-info p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('directos', 'Directos Míos')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">Directos Míos</h6>
@@ -244,7 +274,8 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                 <!-- Card 3: Red Indirecta (Multinivel) -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-success p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-success p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('indirectos', 'Red Indirecta (Multinivel)')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">Red Indirecta (Multinivel)</h6>
@@ -259,7 +290,8 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                 <!-- Card 4: Votan en Yopal -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-success p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-success p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('si', 'Votan en Yopal')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">Votan en Yopal</h6>
@@ -274,7 +306,8 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                 <!-- Card 5: Quieren Inscribir Cédula -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-warning p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-warning p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('inscribir', 'Quieren Inscribir Cédula')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">Quieren Inscribir Cédula</h6>
@@ -289,7 +322,8 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
                 <!-- Card 6: No Votantes / Otro Municipio -->
                 <div class="col-md-4 col-sm-6">
-                    <div class="card card-custom bg-white border-start border-4 border-secondary p-3 h-100 shadow-sm">
+                    <div class="card card-custom card-interactive bg-white border-start border-4 border-secondary p-3 h-100 shadow-sm"
+                         onclick="abrirTarjetaEmergenteLider('no', 'No Votantes / Otro Municipio')">
                         <div class="card-body p-1 d-flex align-items-center justify-content-between">
                             <div>
                                 <h6 class="text-uppercase text-muted fw-bold small mb-1">No Votantes / Otro</h6>
@@ -307,95 +341,77 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
     </div>
 
-    <!-- Panel de Filtros para el Líder -->
+    <!-- Panel de Filtros -->
     <div class="card card-custom mb-4 shadow-sm border">
-        <div class="card-header bg-white py-3 border-0">
-            <h5 class="fw-bold text-primary mb-0"><i class="fas fa-filter me-2"></i>Filtros de Búsqueda en Mi Red</h5>
-        </div>
-        <div class="card-body p-4 pt-0">
-            <form action="dashboard.php" method="GET" class="row g-3">
+        <div class="card-body p-3">
+            <form action="dashboard.php" method="GET" class="row g-2 align-items-center">
                 <div class="col-md-3">
-                    <label for="comuna" class="form-label fw-bold small text-muted"><i class="fas fa-map-marker-alt me-1"></i>Comuna / Corregimiento:</label>
-                    <select name="comuna" id="comuna" class="form-select">
-                        <option value="">-- Todos los Sectores --</option>
-                        <optgroup label="Comunas Urbanas">
-                            <option value="Comuna 1" <?= $comunaFiltro === 'Comuna 1' ? 'selected' : '' ?>>Comuna 1 - El Hobo</option>
-                            <option value="Comuna 2" <?= $comunaFiltro === 'Comuna 2' ? 'selected' : '' ?>>Comuna 2 - Viveros</option>
-                            <option value="Comuna 3" <?= $comunaFiltro === 'Comuna 3' ? 'selected' : '' ?>>Comuna 3 - Clelia Rivero</option>
-                            <option value="Comuna 4" <?= $comunaFiltro === 'Comuna 4' ? 'selected' : '' ?>>Comuna 4 - Campiña</option>
-                            <option value="Comuna 5" <?= $comunaFiltro === 'Comuna 5' ? 'selected' : '' ?>>Comuna 5 - Villa del Sol</option>
-                            <option value="Comuna 6" <?= $comunaFiltro === 'Comuna 6' ? 'selected' : '' ?>>Comuna 6 - Llano Lindo</option>
-                        </optgroup>
-                        <optgroup label="Corregimientos Rurales">
-                            <option value="Corregimiento El Morro" <?= $comunaFiltro === 'Corregimiento El Morro' ? 'selected' : '' ?>>Corregimiento El Morro</option>
-                            <option value="Corregimiento La Chaparrera" <?= $comunaFiltro === 'Corregimiento La Chaparrera' ? 'selected' : '' ?>>Corregimiento La Chaparrera</option>
-                            <option value="Corregimiento Tilodirán" <?= $comunaFiltro === 'Corregimiento Tilodirán' ? 'selected' : '' ?>>Corregimiento Tilodirán</option>
-                            <option value="Corregimiento Quebradaseca" <?= $comunaFiltro === 'Corregimiento Quebradaseca' ? 'selected' : '' ?>>Corregimiento Quebradaseca</option>
-                            <option value="Corregimiento Punto Nuevo" <?= $comunaFiltro === 'Corregimiento Punto Nuevo' ? 'selected' : '' ?>>Corregimiento Punto Nuevo</option>
-                            <option value="Corregimiento El Taladro" <?= $comunaFiltro === 'Corregimiento El Taladro' ? 'selected' : '' ?>>Corregimiento El Taladro</option>
-                            <option value="Corregimiento Tacarimena" <?= $comunaFiltro === 'Corregimiento Tacarimena' ? 'selected' : '' ?>>Corregimiento Tacarimena</option>
-                            <option value="Corregimiento La Niata" <?= $comunaFiltro === 'Corregimiento La Niata' ? 'selected' : '' ?>>Corregimiento La Niata</option>
-                            <option value="Corregimiento La Guafilla" <?= $comunaFiltro === 'Corregimiento La Guafilla' ? 'selected' : '' ?>>Corregimiento La Guafilla</option>
-                            <option value="Corregimiento Mata de Limón" <?= $comunaFiltro === 'Corregimiento Mata de Limón' ? 'selected' : '' ?>>Corregimiento Mata de Limón</option>
-                            <option value="Corregimiento El Charte" <?= $comunaFiltro === 'Corregimiento El Charte' ? 'selected' : '' ?>>Corregimiento El Charte</option>
-                        </optgroup>
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <label for="votante_yopal" class="form-label fw-bold small text-muted"><i class="fas fa-vote-yea me-1"></i>Estado de Votación:</label>
-                    <select name="votante_yopal" id="votante_yopal" class="form-select">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-vote-yea me-1"></i>Votante en Yopal:</label>
+                    <select name="votante_yopal" class="form-select form-select-sm">
                         <option value="">-- Todos los Estados --</option>
                         <option value="Si" <?= $votanteFiltro === 'Si' ? 'selected' : '' ?>>Sí, voto en Yopal</option>
                         <option value="Quiero inscribir" <?= $votanteFiltro === 'Quiero inscribir' ? 'selected' : '' ?>>Quiero inscribir cédula</option>
-                        <option value="No" <?= $votanteFiltro === 'No' ? 'selected' : '' ?>>No, voto en otro municipio</option>
+                        <option value="No" <?= $votanteFiltro === 'No' ? 'selected' : '' ?>>No / Sin consultar</option>
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label for="tipo_ref" class="form-label fw-bold small text-muted"><i class="fas fa-sitemap me-1"></i>Origen / Nivel:</label>
-                    <select name="tipo_ref" id="tipo_ref" class="form-select">
-                        <option value="">-- Todos los Niveles --</option>
-                        <option value="usuario" <?= $tipoRefFiltro === 'usuario' ? 'selected' : '' ?>>Directos míos</option>
-                        <option value="referido" <?= $tipoRefFiltro === 'referido' ? 'selected' : '' ?>>Referidos de mi red (Multinivel)</option>
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-map-marker-alt me-1"></i>Comuna / Sector:</label>
+                    <select name="comuna" class="form-select form-select-sm">
+                        <option value="">-- Todas las Comunas --</option>
+                        <option value="Comuna 1" <?= $comunaFiltro === 'Comuna 1' ? 'selected' : '' ?>>Comuna 1 - El Hobo</option>
+                        <option value="Comuna 2" <?= $comunaFiltro === 'Comuna 2' ? 'selected' : '' ?>>Comuna 2 - Viveros</option>
+                        <option value="Comuna 3" <?= $comunaFiltro === 'Comuna 3' ? 'selected' : '' ?>>Comuna 3 - Clelia Rivero</option>
+                        <option value="Comuna 4" <?= $comunaFiltro === 'Comuna 4' ? 'selected' : '' ?>>Comuna 4 - Campiña</option>
+                        <option value="Comuna 5" <?= $comunaFiltro === 'Comuna 5' ? 'selected' : '' ?>>Comuna 5 - Villa del Sol</option>
+                        <option value="Comuna 6" <?= $comunaFiltro === 'Comuna 6' ? 'selected' : '' ?>>Comuna 6 - Llano Lindo</option>
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label for="buscar" class="form-label fw-bold small text-muted"><i class="fas fa-search me-1"></i>Buscar Nombre, Cédula o Celular:</label>
-                    <input type="text" name="buscar" id="buscar" class="form-control" placeholder="Ej. Nombre completo o Cédula..." value="<?= e($buscarFiltro) ?>">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-sitemap me-1"></i>Tipo de Registro:</label>
+                    <select name="tipo_ref" class="form-select form-select-sm">
+                        <option value="">-- Directos e Indirectos --</option>
+                        <option value="usuario" <?= $tipoRefFiltro === 'usuario' ? 'selected' : '' ?>>Directos Míos</option>
+                        <option value="referido" <?= $tipoRefFiltro === 'referido' ? 'selected' : '' ?>>Red Indirecta (Multinivel)</option>
+                    </select>
                 </div>
-                <div class="col-12 d-flex justify-content-end gap-2 mt-3">
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-search me-1"></i>Buscar:</label>
+                    <input type="text" name="buscar" class="form-control form-control-sm" placeholder="Nombre, Cédula o Celular..." value="<?= e($buscarFiltro) ?>">
+                </div>
+                <div class="col-12 d-flex justify-content-end gap-2 pt-2">
                     <a href="dashboard.php" class="btn btn-secondary btn-sm"><i class="fas fa-undo me-1"></i> Limpiar Filtros</a>
-                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search me-1"></i> Aplicar Filtros</button>
+                    <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-filter me-1"></i> Aplicar Filtros</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Tabla de Estado de la Red -->
+    <!-- Tabla Principal de Integrantes de la Red -->
     <div class="card card-custom shadow-sm border">
         <div class="card-body p-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5 class="fw-bold text-primary mb-0"><i class="fas fa-users me-2"></i>Integrantes de Mi Red</h5>
-                <span class="badge bg-primary fs-6">Mostrando <?= count($miembros) ?> de <?= $totalRedFiltrada ?> Registrados</span>
+                <h5 class="fw-bold text-primary mb-0"><i class="fas fa-users me-2"></i>Integrantes Registrados en mi Red</h5>
+                <span class="badge bg-dark fs-6">Mostrando <?= count($miembros) ?> de <?= $totalRedFiltrada ?> Referidos (Página <?= $paginaActual ?> de <?= $totalPaginas ?>)</span>
             </div>
 
             <div class="table-responsive">
                 <table class="table table-hover align-middle">
-                    <thead class="table-light">
+                    <thead class="table-dark">
                         <tr>
                             <th>Cédula</th>
                             <th>Nombres y Apellidos</th>
                             <th>Celular</th>
                             <th>Comuna / Sector</th>
                             <th>Votante Yopal</th>
-                            <th>Personas Referidas (Total / Desglose)</th>
+                            <th>Referidos Traídos</th>
                             <th>Invitado Por</th>
-                            <th class="text-center">Acciones</th>
+                            <th class="text-center">Acción</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($miembros)): ?>
                             <tr>
-                                <td colspan="8" class="text-center py-4 text-muted">No se encontraron personas que coincidan con la búsqueda o filtro.</td>
+                                <td colspan="8" class="text-center py-4 text-muted">No se encontraron integrantes en tu red con los filtros seleccionados.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($miembros as $m): ?>
@@ -405,12 +421,28 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                                     <td><i class="fas fa-phone-alt me-1 text-muted small"></i><?= e($m['celular']) ?></td>
                                     <td><span class="badge bg-light text-dark border"><i class="fas fa-map-marker-alt text-primary me-1"></i><?= e($m['comuna']) ?></span></td>
                                     <td>
+                                        <?php 
+                                        $esVerificado = !empty($m['puesto_votacion']) && strpos($m['puesto_votacion'], 'PROCESO') === false;
+                                        ?>
                                         <?php if ($m['votante_yopal'] === 'Si'): ?>
-                                            <span class="badge bg-success badge-votante">Sí en Yopal</span>
+                                            <span class="badge bg-success badge-votante"><i class="fas fa-check-circle me-1"></i>Sí en Yopal</span>
+                                            <?php if ($esVerificado): ?>
+                                                <div class="small text-success fw-bold mt-1" title="Verificado con Registraduría"><i class="fas fa-check-double me-1"></i>Verificado</div>
+                                            <?php else: ?>
+                                                <div class="small text-muted mt-1"><i class="fas fa-user-edit me-1"></i>Declaración Registro</div>
+                                            <?php endif; ?>
                                         <?php elseif ($m['votante_yopal'] === 'Quiero inscribir'): ?>
                                             <span class="badge bg-warning text-dark badge-votante"><i class="fas fa-edit me-1"></i>Inscribirá Cédula</span>
+                                            <?php if ($esVerificado): ?>
+                                                <div class="small text-success fw-bold mt-1" title="Verificado con Registraduría"><i class="fas fa-check-double me-1"></i>Verificado</div>
+                                            <?php else: ?>
+                                                <div class="small text-muted mt-1"><i class="fas fa-user-edit me-1"></i>Declaración Registro</div>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="badge bg-secondary badge-votante">Otro</span>
+                                            <span class="badge bg-secondary badge-votante"><i class="fas fa-times-circle me-1"></i>No Votante / Otro</span>
+                                            <?php if ($esVerificado): ?>
+                                                <div class="small text-info fw-bold mt-1" title="Verificado con Registraduría"><i class="fas fa-check-double me-1"></i>Verificado</div>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     </td>
                                     
@@ -459,25 +491,94 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                 </table>
             </div>
 
-            <!-- Paginación -->
+            <!-- Paginación Inteligente -->
             <?php if ($totalPaginas > 1): ?>
                 <nav aria-label="Navegación de mi red" class="mt-4">
-                    <ul class="pagination justify-content-center">
+                    <ul class="pagination justify-content-center flex-wrap">
+                        <!-- Anterior -->
                         <li class="page-item <?= ($paginaActual <= 1) ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual - 1) ?>"><i class="fas fa-chevron-left me-1"></i> Anterior</a>
+                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual - 1) ?>">
+                                <i class="fas fa-chevron-left me-1"></i> Anterior
+                            </a>
                         </li>
-                        <?php for ($p = 1; $p <= $totalPaginas; $p++): ?>
+
+                        <!-- Primera página siempre -->
+                        <?php if ($inicioPag > 1): ?>
+                            <li class="page-item"><a class="page-link" href="<?= $pageUrlPrefix ?>1">1</a></li>
+                            <?php if ($inicioPag > 2): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                        <?php endif; ?>
+
+                        <!-- Páginas del rango central -->
+                        <?php for ($p = $inicioPag; $p <= $finPag; $p++): ?>
                             <li class="page-item <?= ($p === $paginaActual) ? 'active' : '' ?>">
                                 <a class="page-link" href="<?= $pageUrlPrefix . $p ?>"><?= $p ?></a>
                             </li>
                         <?php endfor; ?>
+
+                        <!-- Última página siempre -->
+                        <?php if ($finPag < $totalPaginas): ?>
+                            <?php if ($finPag < $totalPaginas - 1): ?>
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            <?php endif; ?>
+                            <li class="page-item"><a class="page-link" href="<?= $pageUrlPrefix . $totalPaginas ?>"><?= $totalPaginas ?></a></li>
+                        <?php endif; ?>
+
+                        <!-- Siguiente -->
                         <li class="page-item <?= ($paginaActual >= $totalPaginas) ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual + 1) ?>">Siguiente <i class="fas fa-chevron-right ms-1"></i></a>
+                            <a class="page-link" href="<?= $pageUrlPrefix . ($paginaActual + 1) ?>">
+                                Siguiente <i class="fas fa-chevron-right ms-1"></i>
+                            </a>
                         </li>
                     </ul>
                 </nav>
             <?php endif; ?>
 
+        </div>
+    </div>
+</div>
+
+<!-- MODAL TARJETA EMERGENTE LÍDER (LISTA COMPLETA AL CLICKEAR LAS TARJETAS) -->
+<div class="modal fade" id="modalTarjetaEmergenteLider" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold" id="tituloModalEmergenteLider"><i class="fas fa-users me-2 text-warning"></i>Lista de Integrantes</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                    <span class="badge bg-dark fs-6" id="totalModalEmergenteLider">0 Integrantes Encontrados</span>
+                    <div style="max-width: 380px;" class="w-100">
+                        <input type="text" id="filtroModalEmergenteLider" class="form-control form-control-sm" placeholder="🔍 Buscar en esta lista (nombre, cédula, celular)..." onkeyup="filtrarListaModalLider()">
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Cédula</th>
+                                <th>Nombres y Apellidos</th>
+                                <th>Celular</th>
+                                <th>Comuna / Sector</th>
+                                <th>Votante Yopal</th>
+                                <th>Referidos Traídos</th>
+                                <th>Invitado Por</th>
+                                <th>Fecha Registro</th>
+                            </tr>
+                        </thead>
+                        <tbody id="contenidoModalEmergenteLider">
+                            <!-- Carga dinámicamente -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
         </div>
     </div>
 </div>
@@ -491,8 +592,6 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body p-4">
-                
-                <!-- Resumen en 3 Cuadritos al inicio del Modal -->
                 <div class="d-flex align-items-center justify-content-between bg-light p-3 rounded mb-3 border">
                     <span class="fw-bold text-muted small"><i class="fas fa-chart-pie me-1"></i>Resumen de Votación:</span>
                     <div class="d-flex gap-2">
@@ -635,10 +734,103 @@ $pageUrlPrefix = '?' . ($queryString ? $queryString . '&' : '') . 'page=';
 
     let editModal;
     let subreferidosModal;
+    let modalEmergenteLiderInstancia;
+    let datosModalLiderActuales = [];
+
     document.addEventListener('DOMContentLoaded', function() {
         editModal = new bootstrap.Modal(document.getElementById('modalEditarReferido'));
         subreferidosModal = new bootstrap.Modal(document.getElementById('modalSubreferidos'));
+        modalEmergenteLiderInstancia = new bootstrap.Modal(document.getElementById('modalTarjetaEmergenteLider'));
     });
+
+    function abrirTarjetaEmergenteLider(filtroKey, tituloNombre) {
+        document.getElementById('tituloModalEmergenteLider').innerHTML = '<i class="fas fa-list-alt me-2 text-warning"></i>' + tituloNombre;
+        const contenedor = document.getElementById('contenidoModalEmergenteLider');
+        const badgeTotal = document.getElementById('totalModalEmergenteLider');
+        document.getElementById('filtroModalEmergenteLider').value = '';
+        
+        contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2 text-primary fa-lg"></i>Cargando lista de integrantes...</td></tr>';
+        badgeTotal.textContent = 'Cargando...';
+        
+        modalEmergenteLiderInstancia.show();
+
+        fetch('api_lista_lider.php?filtro=' + encodeURIComponent(filtroKey))
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.lista && data.lista.length > 0) {
+                    datosModalLiderActuales = data.lista;
+                    renderizarListaModalLider(data.lista);
+                    badgeTotal.textContent = data.lista.length + ' Integrantes Encontrados';
+                } else if (data.success) {
+                    datosModalLiderActuales = [];
+                    contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">No se encontraron integrantes en esta categoría.</td></tr>';
+                    badgeTotal.textContent = '0 Integrantes';
+                } else {
+                    contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle me-2"></i>' + (data.message || 'Error al consultar la información.') + '</td></tr>';
+                    badgeTotal.textContent = 'Error';
+                }
+            })
+            .catch(err => {
+                console.error("Error AJAX:", err);
+                contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error al consultar la información.</td></tr>';
+                badgeTotal.textContent = 'Error';
+            });
+    }
+
+    function renderizarListaModalLider(lista) {
+        const contenedor = document.getElementById('contenidoModalEmergenteLider');
+        if (lista.length === 0) {
+            contenedor.innerHTML = '<tr><td colspan="9" class="text-center py-3 text-muted">No coinciden resultados con la búsqueda.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        lista.forEach((item, index) => {
+            let badgeVotante = '<span class="badge bg-secondary"><i class="fas fa-times-circle me-1"></i>No Votante / Otro</span>';
+            let txtVerif = item.verificado ? '<div class="small text-success fw-bold mt-1" title="Verificado con Registraduría"><i class="fas fa-check-double me-1"></i>Verificado</div>' : '<div class="small text-muted mt-1"><i class="fas fa-user-edit me-1"></i>Declaración Registro</div>';
+
+            if (item.votante_yopal === 'Si') {
+                badgeVotante = '<span class="badge bg-success"><i class="fas fa-check-circle me-1"></i>Sí en Yopal</span>' + txtVerif;
+            } else if (item.votante_yopal === 'Quiero inscribir') {
+                badgeVotante = '<span class="badge bg-warning text-dark"><i class="fas fa-edit me-1"></i>Inscribirá Cédula</span>' + txtVerif;
+            } else if (item.verificado) {
+                badgeVotante = '<span class="badge bg-secondary"><i class="fas fa-times-circle me-1"></i>No Votante / Otro</span><div class="small text-info fw-bold mt-1"><i class="fas fa-check-double me-1"></i>Verificado</div>';
+            }
+
+            html += `
+                <tr>
+                    <td class="small text-muted">${index + 1}</td>
+                    <td class="fw-bold"><span class="badge bg-light text-dark border">${item.cedula}</span></td>
+                    <td class="fw-bold text-dark">${item.nombre_completo}</td>
+                    <td>
+                        ${item.celular ? `<a href="tel:${item.celular}" class="btn btn-outline-success btn-sm py-0 px-2 fw-bold"><i class="fas fa-phone-alt me-1"></i>${item.celular}</a>` : '<span class="text-muted">Sin celular</span>'}
+                    </td>
+                    <td><span class="badge bg-light text-dark border">${item.comuna}</span></td>
+                    <td>${badgeVotante}</td>
+                    <td><span class="badge bg-light text-primary border">${item.sub_referidos_count} Referidos</span></td>
+                    <td class="small text-muted">${item.invitador_nombre}</td>
+                    <td class="small text-muted">${item.fecha}</td>
+                </tr>
+            `;
+        });
+        contenedor.innerHTML = html;
+    }
+
+    function filtrarListaModalLider() {
+        const term = document.getElementById('filtroModalEmergenteLider').value.toLowerCase().trim();
+        if (!term) {
+            renderizarListaModalLider(datosModalLiderActuales);
+            return;
+        }
+        const filtrados = datosModalLiderActuales.filter(item => 
+            item.nombre_completo.toLowerCase().includes(term) ||
+            item.cedula.toLowerCase().includes(term) ||
+            item.celular.toLowerCase().includes(term) ||
+            item.comuna.toLowerCase().includes(term) ||
+            item.invitador_nombre.toLowerCase().includes(term)
+        );
+        renderizarListaModalLider(filtrados);
+    }
 
     function abrirModalEditar(referido) {
         document.getElementById('edit_id').value = referido.id;

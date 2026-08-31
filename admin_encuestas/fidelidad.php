@@ -15,6 +15,7 @@ $offset = ($paginaActual - 1) * $registrosPorPagina;
 
 $filtroFidelidad = sanitizeInput($_GET['fidelidad'] ?? '');
 $buscarText = sanitizeInput($_GET['buscar'] ?? '');
+$rondaIdFiltro = sanitizeInput($_GET['ronda_id'] ?? '');
 
 // Consulta para analizar la fidelidad del votante según su historial completo de encuestas
 $sqlFidelidad = "
@@ -27,6 +28,7 @@ $sqlFidelidad = "
            MAX(re.creado_en) as ultima_fecha
     FROM referidos r
     JOIN respuestas_encuestas re ON re.referido_id = r.id
+    " . ($rondaIdFiltro !== '' ? "WHERE re.ronda_id = " . intval($rondaIdFiltro) . " " : "") . "
     GROUP BY r.id
 ";
 
@@ -39,6 +41,9 @@ $fielesPorCandidato = [];
 // Obtener lista de candidatos activos
 $stmtCandList = $pdo->query("SELECT nombre, grupo FROM candidatos_encuestas WHERE activo = 1 ORDER BY id ASC");
 $candidatosActivos = $stmtCandList->fetchAll();
+
+$stmtRondas = $pdo->query("SELECT id, nombre_ronda FROM rondas_encuestas ORDER BY id ASC");
+$todasRondas = $stmtRondas->fetchAll();
 
 foreach ($candidatosActivos as $c) {
     $fielesPorCandidato[$c['nombre']] = 0;
@@ -64,9 +69,11 @@ foreach ($todosVotantes as $v) {
         $countNumEquivocado++;
     } elseif (strpos($ultimo, 'Rechazó') !== false) {
         $countRechazo++;
-    } elseif ($v['total_rondas'] == 1) {
+    } elseif (strpos(strtolower($ultimo), 'indeciso') !== false) {
+        $countIndecisos++;
+    } elseif ($rondaIdFiltro === '' && $v['total_rondas'] == 1) {
         $countUnaSola++;
-    } elseif ($v['candidatos_distintos'] == 1 && strpos(strtolower($ultimo), 'indeciso') === false) {
+    } elseif ($rondaIdFiltro !== '' || $v['candidatos_distintos'] == 1) {
         $countTotalFieles++;
         if (isset($fielesPorCandidato[$ultimo])) {
             $fielesPorCandidato[$ultimo]++;
@@ -75,8 +82,6 @@ foreach ($todosVotantes as $v) {
         }
     } elseif ($v['candidatos_distintos'] > 1) {
         $countCambiantes++;
-    } else {
-        $countIndecisos++;
     }
 }
 
@@ -85,7 +90,7 @@ $havingClauses = [];
 $params = [];
 
 if ($filtroFidelidad === 'fiel') {
-    $havingClauses[] = "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo NOT LIKE '%Indeciso%' AND voto_ultimo NOT LIKE '%No Contestó%' AND voto_ultimo NOT LIKE '%Cédula Falsa%' AND voto_ultimo NOT LIKE '%Equivocado%' AND voto_ultimo NOT LIKE '%Rechazó%'";
+    $havingClauses[] = $rondaIdFiltro !== '' ? "voto_ultimo NOT LIKE '%Indeciso%' AND voto_ultimo NOT LIKE '%No Contestó%' AND voto_ultimo NOT LIKE '%Cédula Falsa%' AND voto_ultimo NOT LIKE '%Equivocado%' AND voto_ultimo NOT LIKE '%Rechazó%'" : "total_rondas > 1 AND candidatos_distintos = 1 AND voto_ultimo NOT LIKE '%Indeciso%' AND voto_ultimo NOT LIKE '%No Contestó%' AND voto_ultimo NOT LIKE '%Cédula Falsa%' AND voto_ultimo NOT LIKE '%Equivocado%' AND voto_ultimo NOT LIKE '%Rechazó%'";
 } elseif ($filtroFidelidad === 'cambiante') {
     $havingClauses[] = "total_rondas > 1 AND candidatos_distintos > 1";
 } elseif ($filtroFidelidad === 'indeciso') {
@@ -154,6 +159,16 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/mdb-ui-kit/6.4.0/mdb.min.css">
     <link rel="stylesheet" href="../assets/css/custom.css">
+    <style>
+        .card-interactive {
+            cursor: pointer;
+            transition: all 0.25s ease-in-out;
+        }
+        .card-interactive:hover {
+            transform: translateY(-4px) scale(1.02);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.15) !important;
+        }
+    </style>
 </head>
 <body class="bg-light">
 
@@ -162,7 +177,7 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
 <div class="container-fluid px-4 py-4">
 
-    <!-- Tarjetas de Resumen de Votantes Fieles por Candidato y Estados Especiales -->
+    <!-- Tarjetas de Resumen Interactivas (Hacer clic para abrir la Tarjeta Emergente) -->
     <div class="row g-3 mb-4">
         <?php 
         $coloresBorde = ['border-success', 'border-primary', 'border-warning', 'border-info', 'border-dark'];
@@ -179,10 +194,11 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
             $txt = $coloresTexto[$indexCand % count($coloresTexto)];
         ?>
             <div class="col-xl-3 col-md-6">
-                <div class="card card-custom bg-white border-start border-4 <?= $borde ?> p-3 shadow-sm h-100">
+                <div class="card card-custom card-interactive bg-white border-start border-4 <?= $borde ?> p-3 shadow-sm h-100" 
+                     onclick="abrirTarjetaEmergente('fiel_<?= urlencode($nomC) ?>', 'Votantes Fieles a: <?= e($nomC) ?>')">
                     <div class="card-body p-1 d-flex align-items-center justify-content-between">
                         <div>
-                            <h6 class="text-uppercase text-muted fw-bold small mb-1">Fieles (100% Leal)</h6>
+                            <h6 class="text-uppercase text-muted fw-bold small mb-1"><?= $rondaIdFiltro !== '' ? 'Votos en esta Ronda' : 'Fieles (100% Leal)' ?></h6>
                             <h5 class="fw-bold text-dark mb-0 text-truncate" style="max-width: 170px;"><?= e($nomC) ?></h5>
                             <div class="mt-1">
                                 <span class="fw-bold <?= $txt ?> fs-5"><?= $totalFielesCand ?></span>
@@ -199,7 +215,8 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
         <!-- Tarjeta de Control 1: No Contestaron -->
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-warning p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-warning p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergente('no_contesto', 'No Contestaron / Sin Respuesta')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
@@ -218,7 +235,8 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
         <!-- Tarjeta de Control 2: Cédulas Falsas -->
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-dark p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-dark p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergente('cedula_falsa', 'Cédulas Falsas / Inexistentes')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Registro</h6>
@@ -237,7 +255,8 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
         <!-- Tarjeta de Control 3: Números Equivocados -->
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-danger p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-danger p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergente('equivocado', 'Números Equivocados / Inaccesibles')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
@@ -256,7 +275,8 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
         <!-- Tarjeta de Control 4: Rechazaron Encuesta -->
         <div class="col-xl-3 col-md-6">
-            <div class="card card-custom bg-white border-start border-4 border-secondary p-3 shadow-sm h-100">
+            <div class="card card-custom card-interactive bg-white border-start border-4 border-secondary p-3 shadow-sm h-100"
+                 onclick="abrirTarjetaEmergente('rechazo', 'Rechazaron la Encuesta')">
                 <div class="card-body p-1 d-flex align-items-center justify-content-between">
                     <div>
                         <h6 class="text-uppercase text-muted fw-bold small mb-1">Estado de Llamada</h6>
@@ -279,14 +299,23 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
     <div class="card card-custom mb-4 shadow-sm border">
         <div class="card-body p-3">
             <form action="fidelidad.php" method="GET" class="row g-2 align-items-center">
-                <div class="col-md-5">
-                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-filter me-1"></i>Filtrar por Candidato o Estado de Llamada:</label>
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-history me-1"></i>Ronda de Encuesta:</label>
+                    <select name="ronda_id" class="form-select form-select-sm">
+                        <option value="">-- Todas las Rondas (Matriz Histórica) --</option>
+                        <?php foreach ($todasRondas as $ronda): ?>
+                            <option value="<?= $ronda['id'] ?>" <?= $rondaIdFiltro == $ronda['id'] ? 'selected' : '' ?>><?= e($ronda['nombre_ronda']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-filter me-1"></i>Filtrar por Candidato o Estado:</label>
                     <select name="fidelidad" class="form-select form-select-sm">
                         <option value="">-- Todos los Votantes Encuestados --</option>
-                        <option value="fiel" <?= $filtroFidelidad === 'fiel' ? 'selected' : '' ?>>🟩 Todos los Votantes Fieles (<?= $countTotalFieles ?>)</option>
+                        <option value="fiel" <?= $filtroFidelidad === 'fiel' ? 'selected' : '' ?>>🟩 <?= $rondaIdFiltro !== '' ? 'Votos Válidos' : 'Todos los Votantes Fieles' ?> (<?= $countTotalFieles ?>)</option>
                         <?php foreach ($candidatosActivos as $c): ?>
                             <option value="fiel_<?= e($c['nombre']) ?>" <?= $filtroFidelidad === 'fiel_' . $c['nombre'] ? 'selected' : '' ?>>
-                                ➔ Fieles a: <?= e($c['nombre']) ?> (<?= $fielesPorCandidato[$c['nombre']] ?? 0 ?>)
+                                ➔ <?= $rondaIdFiltro !== '' ? 'Votos por' : 'Fieles a' ?>: <?= e($c['nombre']) ?> (<?= $fielesPorCandidato[$c['nombre']] ?? 0 ?>)
                             </option>
                         <?php endforeach; ?>
                         <option value="cambiante" <?= $filtroFidelidad === 'cambiante' ? 'selected' : '' ?>>🟧 Votantes Cambiantes / En Riesgo (<?= $countCambiantes ?>)</option>
@@ -297,11 +326,11 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
                         <option value="rechazo" <?= $filtroFidelidad === 'rechazo' ? 'selected' : '' ?>>🛑 Rechazaron la Encuesta (<?= $countRechazo ?>)</option>
                     </select>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label class="form-label small fw-bold text-muted mb-1"><i class="fas fa-search me-1"></i>Buscar Afiliado:</label>
                     <input type="text" name="buscar" class="form-control form-control-sm" placeholder="Nombre, Cédula o Celular..." value="<?= e($buscarText) ?>">
                 </div>
-                <div class="col-md-3 d-flex align-items-end justify-content-end gap-2 pt-3">
+                <div class="col-md-2 d-flex align-items-end justify-content-end gap-2 pt-3">
                     <a href="fidelidad.php" class="btn btn-secondary btn-sm"><i class="fas fa-undo me-1"></i> Limpiar</a>
                     <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search me-1"></i> Filtrar</button>
                 </div>
@@ -440,6 +469,48 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 
 </div>
 
+<!-- MODAL TARJETA EMERGENTE (LISTA INTERACTIVA AL HACER CLIC EN LOS RECUADROS) -->
+<div class="modal fade" id="modalTarjetaEmergente" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title fw-bold" id="tituloModalEmergente"><i class="fas fa-users me-2 text-warning"></i>Lista de Afiliados</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4">
+                <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                    <span class="badge bg-primary fs-6" id="totalModalEmergente">0 Afiliados Encontrados</span>
+                    <div style="max-width: 380px;" class="w-100">
+                        <input type="text" id="filtroModalEmergente" class="form-control form-control-sm" placeholder="🔍 Buscar en esta lista (nombre, cédula, celular)..." onkeyup="filtrarListaModal()">
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Afiliado</th>
+                                <th>Cédula</th>
+                                <th>Celular</th>
+                                <th>Sector / Comuna</th>
+                                <th>Puesto y Mesa</th>
+                                <th>Último Resultado</th>
+                                <th>Fecha & Nota</th>
+                            </tr>
+                        </thead>
+                        <tbody id="contenidoModalEmergente">
+                            <!-- Se carga dinámicamente mediante AJAX -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Modal Ver Historial Completo y Observaciones del Votante -->
 <div class="modal fade" id="modalHistorialVotante" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg">
@@ -477,9 +548,93 @@ $finPag = min($totalPaginas, $paginaActual + $rangoVista);
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     let historialModal;
+    let modalEmergenteInstancia;
+    let datosModalActuales = [];
+
     document.addEventListener('DOMContentLoaded', function() {
         historialModal = new bootstrap.Modal(document.getElementById('modalHistorialVotante'));
+        modalEmergenteInstancia = new bootstrap.Modal(document.getElementById('modalTarjetaEmergente'));
     });
+
+    function abrirTarjetaEmergente(categoriaKey, tituloNombre) {
+        document.getElementById('tituloModalEmergente').innerHTML = '<i class="fas fa-list-alt me-2 text-warning"></i>' + tituloNombre;
+        const contenedor = document.getElementById('contenidoModalEmergente');
+        const badgeTotal = document.getElementById('totalModalEmergente');
+        document.getElementById('filtroModalEmergente').value = '';
+        
+        contenedor.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-2 text-primary fa-lg"></i>Cargando lista de afiliados...</td></tr>';
+        badgeTotal.textContent = 'Cargando...';
+        
+        modalEmergenteInstancia.show();
+
+        fetch('api_lista_categoria.php?categoria=' + encodeURIComponent(categoriaKey) + '&ronda_id=<?= urlencode($rondaIdFiltro) ?>')
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.lista.length > 0) {
+                    datosModalActuales = data.lista;
+                    renderizarListaModal(data.lista);
+                    badgeTotal.textContent = data.lista.length + ' Afiliados Encontrados';
+                } else {
+                    datosModalActuales = [];
+                    contenedor.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">No se encontraron afiliados en esta categoría.</td></tr>';
+                    badgeTotal.textContent = '0 Afiliados';
+                }
+            })
+            .catch(err => {
+                contenedor.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-danger"><i class="fas fa-exclamation-triangle me-2"></i>Error al consultar la información.</td></tr>';
+                badgeTotal.textContent = 'Error';
+            });
+    }
+
+    function renderizarListaModal(lista) {
+        const contenedor = document.getElementById('contenidoModalEmergente');
+        if (lista.length === 0) {
+            contenedor.innerHTML = '<tr><td colspan="7" class="text-center py-3 text-muted">No coinciden resultados con la búsqueda.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        lista.forEach(item => {
+            const esEspecial = item.voto_ultimo.includes('No Contestó') || item.voto_ultimo.includes('Cédula Falsa') || item.voto_ultimo.includes('Equivocado') || item.voto_ultimo.includes('Rechazó');
+            const badgeClass = esEspecial ? 'bg-warning text-dark' : 'bg-primary';
+
+            html += `
+                <tr>
+                    <td class="fw-bold text-dark">${item.nombre_completo}</td>
+                    <td><span class="badge bg-light text-dark border">${item.cedula}</span></td>
+                    <td>
+                        ${item.celular ? `<a href="tel:${item.celular}" class="btn btn-outline-success btn-sm py-0 px-2 fw-bold"><i class="fas fa-phone-alt me-1"></i>${item.celular}</a>` : '<span class="text-muted">Sin celular</span>'}
+                    </td>
+                    <td><span class="badge bg-light text-dark border">${item.comuna}</span></td>
+                    <td class="small">
+                        <div><i class="fas fa-building me-1 text-muted"></i>${item.puesto_votacion}</div>
+                        <div class="text-muted"><i class="fas fa-sort-numeric-up me-1"></i>Mesa ${item.mesa_votacion}</div>
+                    </td>
+                    <td><span class="badge ${badgeClass}">${item.voto_ultimo}</span></td>
+                    <td class="small">
+                        <div class="text-muted"><i class="far fa-clock me-1"></i>${item.ultima_fecha}</div>
+                        <div class="italic text-dark">${item.observaciones}</div>
+                    </td>
+                </tr>
+            `;
+        });
+        contenedor.innerHTML = html;
+    }
+
+    function filtrarListaModal() {
+        const term = document.getElementById('filtroModalEmergente').value.toLowerCase().trim();
+        if (!term) {
+            renderizarListaModal(datosModalActuales);
+            return;
+        }
+        const filtrados = datosModalActuales.filter(item => 
+            item.nombre_completo.toLowerCase().includes(term) ||
+            item.cedula.toLowerCase().includes(term) ||
+            item.celular.toLowerCase().includes(term) ||
+            item.comuna.toLowerCase().includes(term)
+        );
+        renderizarListaModal(filtrados);
+    }
 
     function verHistorialVotante(referidoId, nombreCompleto) {
         document.getElementById('nombreVotanteModal').textContent = nombreCompleto;
